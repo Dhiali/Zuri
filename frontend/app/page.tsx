@@ -16,13 +16,15 @@ const instruments: Instrument[] = [
 
 const chartTools = ["＋", "╱", "⌁", "⌖", "⌕", "T", "◉", "⌁", "⊞", "⌂", "◌", "♧"];
 const timeframes = ["1m", "5m", "15m", "1h", "4h", "1D", "1W"];
-const candles = Array.from({ length: 78 }, (_, index) => {
-  const trend = index < 34 ? 0.16 : index < 53 ? -0.06 : 0.27;
-  const wave = Math.sin(index * 0.63) * 0.72 + Math.sin(index * 1.73) * 0.32;
-  const open = 57 - index * trend + wave;
-  const close = open + Math.sin(index * 2.19) * 1.35 + trend * 1.8;
-  return { x: 28 + index * 11, open, close, high: Math.min(open, close) - (0.4 + (index % 4) * 0.15), low: Math.max(open, close) + (0.5 + (index % 3) * 0.18), up: close < open };
-});
+const tradingViewSymbols: Record<string, string> = {
+  BTCUSD: "COINBASE:BTCUSD",
+  ETHUSD: "COINBASE:ETHUSD",
+  SOLUSD: "COINBASE:SOLUSD",
+  EURUSD: "FX:EURUSD",
+  GOLD: "TVC:GOLD",
+  AAPL: "NASDAQ:AAPL",
+};
+const tradingViewIntervals: Record<string, string> = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1D": "D", "1W": "W" };
 
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
@@ -36,30 +38,33 @@ function Icon({ name }: { name: string }) {
 }
 
 function Chart({ symbol, timeframe, drawing, aiOnChart }: { symbol: Instrument; timeframe: string; drawing: string; aiOnChart: boolean }) {
-  const isPositive = symbol.up;
-  const selectedCandles = candles.map((candle, index) => ({ ...candle, close: candle.close + (isPositive ? -index * 0.015 : index * 0.01) }));
+  const widgetConfig = {
+      autosize: true,
+      symbol: tradingViewSymbols[symbol.symbol] ?? symbol.symbol,
+      interval: tradingViewIntervals[timeframe] ?? "15",
+      timezone: "Etc/UTC",
+      theme: "dark",
+      style: "1",
+      locale: "en",
+      allow_symbol_change: false,
+      withdateranges: true,
+      hide_side_toolbar: false,
+      hide_top_toolbar: false,
+      save_image: true,
+      details: false,
+      hotlist: false,
+      calendar: false,
+      support_host: "https://www.tradingview.com",
+      backgroundColor: "#111315",
+      gridColor: "#24292a",
+      toolbar_bg: "#151719",
+    };
+  const widgetUrl = `https://www.tradingview-widget.com/embed-widget/advanced-chart/?locale=en#${encodeURIComponent(JSON.stringify(widgetConfig))}`;
+
   return (
-    <div className="chart-wrap">
-      <svg className="price-chart" viewBox="0 0 1000 540" preserveAspectRatio="none" role="img" aria-label={`${symbol.symbol} candlestick chart`}>
-        <defs><linearGradient id="chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor={isPositive ? "#35c7a0" : "#f26e68"} stopOpacity=".13"/><stop offset="100%" stopColor={isPositive ? "#35c7a0" : "#f26e68"} stopOpacity="0"/></linearGradient></defs>
-        {[70, 150, 230, 310, 390, 470].map((y) => <g key={y}><line x1="0" x2="1000" y1={y} y2={y} className="gridline"/><text x="948" y={y - 5} className="axis-label">{(87.2 - y * 0.008).toFixed(1)}k</text></g>)}
-        {[80, 250, 420, 590, 760, 930].map((x) => <line key={x} x1={x} x2={x} y1="15" y2="495" className="gridline vertical"/>)}
-        <path d={`M ${selectedCandles.map((item) => `${item.x},${item.close * 5.8 - 65}`).join(" L ")} L 875,495 L 28,495 Z`} fill="url(#chart-fill)" opacity=".75" />
-        {selectedCandles.map((item, index) => {
-          const top = Math.min(item.open, item.close) * 5.8 - 65;
-          const bottom = Math.max(item.open, item.close) * 5.8 - 65;
-          const color = item.up ? "#39c99e" : "#f27670";
-          return <g key={index} className="candle"><line x1={item.x} x2={item.x} y1={item.high * 5.8 - 65} y2={item.low * 5.8 - 65} stroke={color} strokeWidth="1.3"/><rect x={item.x - 3.2} y={top} width="6.4" height={Math.max(3, bottom - top)} fill={color} rx=".5"/></g>;
-        })}
-        <polyline points={selectedCandles.slice(10, 67).map((item, index) => `${item.x},${item.close * 5.8 - 65 + Math.sin(index / 4) * 15}`).join(" ")} fill="none" stroke="#efbd61" strokeWidth="1.4" opacity=".7" />
-        {aiOnChart && <g className="ai-chart-overlay"><line x1="490" x2="918" y1="276" y2="276" stroke="#b99aff" strokeWidth="1.5" strokeDasharray="5 5"/><rect x="722" y="252" width="194" height="19" rx="3" fill="#352c43"/><text x="730" y="265" className="ai-chart-label">✳ AI RESISTANCE · $86.2K</text></g>}
-        <line x1="0" x2="1000" y1="226" y2="226" stroke={isPositive ? "#35c7a0" : "#f26e68"} strokeDasharray="4 4" opacity=".8" />
-        <rect x="928" y="211" width="68" height="29" fill={isPositive ? "#159b7d" : "#d95854"} rx="3"/><text x="935" y="224" className="last-price">{symbol.price}</text><text x="935" y="235" className="last-time">{timeframe} · 00:42</text>
-        <text x="22" y="526" className="axis-label">09:00</text><text x="212" y="526" className="axis-label">11:00</text><text x="416" y="526" className="axis-label">13:00</text><text x="618" y="526" className="axis-label">15:00</text><text x="820" y="526" className="axis-label">17:00</text>
-        {drawing === "╱" && <line x1="190" y1="354" x2="760" y2="178" stroke="#e8c16d" strokeWidth="2" strokeDasharray="6 5"/>}
-      </svg>
-      <div className="volume-bars">{candles.map((item, index) => <i key={index} style={{ height: `${10 + Math.abs(Math.sin(index * 3.2)) * (index > 55 && index < 62 ? 72 : 24)}%`, background: item.up ? "#2eaa8a" : "#cf625d" }} />)}</div>
-      <div className="chart-watermark">ZURI <span>MARKETS</span></div>
+    <div className="chart-wrap" data-active-tool={drawing}>
+      <iframe key={`${symbol.symbol}-${timeframe}`} className="tradingview-embed" src={widgetUrl} title={`${symbol.symbol} interactive TradingView chart`} />
+      {aiOnChart && <div className="tv-ai-overlay" aria-label={`Zuri AI context for ${symbol.symbol}`}>✳ Zuri AI context · {symbol.symbol}</div>}
     </div>
   );
 }
@@ -75,6 +80,8 @@ export default function Home() {
   const [aiExpanded, setAiExpanded] = useState(false);
   const [aiOnChart, setAiOnChart] = useState(false);
   const [watchlistOpen, setWatchlistOpen] = useState(true);
+  const aiBias = symbol.up ? "UPWARD BIAS" : "DOWNWARD BIAS";
+  const aiBrief = `The simulated ${symbol.symbol} quote is ${symbol.change} today. Treat this as a watch cue, then verify price action and risk before placing a paper order.`;
   const filteredInstruments = instruments.filter((item) => `${item.symbol} ${item.name}`.toLowerCase().includes(query.toLowerCase()));
 
   return (
@@ -97,7 +104,7 @@ export default function Home() {
             <div className="market-summary"><div><span className="instrument-name">{symbol.name} <span className="exchange-tag">· {symbol.group === "Crypto" ? "COINBASE" : "GLOBAL"}</span></span><strong>{symbol.price}</strong><span className={symbol.up ? "positive" : "negative"}>{symbol.change} <small>today</small></span></div><div className="ohlc"><span>O <b>85,742</b></span><span>H <b>86,104</b></span><span>L <b>85,518</b></span><span>C <b>85,890</b></span><span>Vol <b>1.24B</b></span></div></div>
             <section className="chart-panel"><div className="chart-labels"><span><i className="legend-candle"/> Candles</span><span><i className="legend-line"/> EMA 20</span><span className="chart-label-right">USD <span>⌄</span></span></div><div className="chart-stage"><aside className="drawing-toolbar">{chartTools.slice(0, 9).map((tool, index) => <button key={`${tool}-draw-${index}`} className={activeTool === tool ? "drawing-button chosen" : "drawing-button"} title={`Drawing tool ${index + 1}`} onClick={() => setActiveTool(activeTool === tool ? "" : tool)}>{tool}</button>)}<span className="draw-separator"/><button className="drawing-button" title="Remove drawings" onClick={() => setActiveTool("")}>⌫</button></aside><Chart symbol={symbol} timeframe={timeframe} drawing={activeTool} aiOnChart={aiOnChart}/></div><div className="chart-footer"><span>⌖ Crosshair</span><span>⤢ Auto</span><span className="chart-footer-spacer"/><span>1D</span><span>5D</span><span>1M</span><span>6M</span><span>1Y</span><span>ALL</span><span className="utc">17:24:08 UTC</span></div></section>
             <div className="lower-tabs"><button className="lower-tab active">Overview</button><button className="lower-tab">Ideas <span className="count">3</span></button><button className="lower-tab">Financials</button><button className="lower-tab">News <span className="count">5</span></button><span className="lower-tabs-right">Data delayed by up to 15 min</span></div>
-            <div className="below-chart"><section className="watch-summary"><div className="section-title"><div><span className="small-label">YOUR WATCHLIST</span><h2>Market pulse</h2></div><button className="text-action" onClick={() => setWatchlistOpen(!watchlistOpen)}>View watchlist ↗</button></div><div className="pulse-row"><span>Fear & Greed</span><strong>68 <small>Greed</small></strong><div className="sentiment-track"><i/></div><span className="positive">+6 pts</span></div><div className="pulse-row"><span>BTC dominance</span><strong>58.4%</strong><span className="muted">+0.3% this week</span></div></section><section className="ai-takeaway"><div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI AI · CHART READ</span><span className="confidence">82% CONFIDENCE</span></div><h2>Momentum is building, but watch the $86.2k ceiling.</h2><p>Buyers reclaimed the intraday trend after a strong volume spike. A close above resistance would strengthen the bullish case; losing $85.4k could invalidate it.</p><div className="ai-foot"><span>Updated 2 min ago</span><button className="text-action" onClick={() => setAiExpanded(!aiExpanded)}>{aiExpanded ? "Hide analysis ↑" : "See full analysis →"}</button></div>{aiExpanded && <div className="ai-expanded">Scenario: bullish continuation above $86,200. Invalidation: sustained close below $85,400. This is an informational market read, not a recommendation.</div>}</section></div>
+            <div className="below-chart"><section className="watch-summary"><div className="section-title"><div><span className="small-label">YOUR WATCHLIST</span><h2>Market pulse</h2></div><button className="text-action" onClick={() => setWatchlistOpen(!watchlistOpen)}>View watchlist ↗</button></div><div className="pulse-row"><span>Fear & Greed</span><strong>68 <small>Greed</small></strong><div className="sentiment-track"><i/></div><span className="positive">+6 pts</span></div><div className="pulse-row"><span>BTC dominance</span><strong>58.4%</strong><span className="muted">+0.3% this week</span></div></section><section className="ai-takeaway"><div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI AI · DEMO CHART READ</span><span className="confidence">QUOTE CONTEXT</span></div><h2>{symbol.symbol} · {symbol.up ? "Upward" : "Downward"} bias</h2><p>{aiBrief}</p><div className="ai-foot"><span>Based on simulated quote data</span><button className="text-action" onClick={() => setAiExpanded(!aiExpanded)}>{aiExpanded ? "Hide analysis ↑" : "See full analysis →"}</button></div>{aiExpanded && <div className="ai-expanded">This prototype insight reflects the demo quote direction only. It is not live market analysis or a recommendation.</div>}</section></div>
           </>}
           {section === "Dashboard" && <Dashboard setSection={setSection}/>}
           {section === "Trade" && <TradeView symbol={symbol} orderSide={orderSide} setOrderSide={setOrderSide} orderPlaced={orderPlaced} setOrderPlaced={setOrderPlaced}/>}
@@ -106,7 +113,25 @@ export default function Home() {
         </div>
         <aside className={watchlistOpen ? "right-rail" : "right-rail collapsed"}>
           <div className="rail-head"><div><h2>Watchlist</h2><span className="rail-count">{instruments.length} markets</span></div><button className="rail-action" title="Add symbol" onClick={() => document.getElementById("market-search")?.focus()}>＋</button><button className="rail-action" title="Collapse watchlist" onClick={() => setWatchlistOpen(false)}>⌄</button></div>
-          {watchlistOpen && <><label className="search-box"><span>⌕</span><input id="market-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search markets"/><kbd>/</kbd></label><div className="watchlist-columns"><span>SYMBOL</span><span>LAST</span><span>24H</span></div><div className="watchlist-items">{filteredInstruments.map((item) => <button key={item.symbol} className={symbol.symbol === item.symbol ? "watch-row selected" : "watch-row"} onClick={() => { setSymbol(item); setSection("Markets"); }}><span className={`watch-icon ${item.group.toLowerCase()}`}>{item.icon}</span><span className="watch-symbol"><b>{item.symbol}</b><small>{item.group}</small></span><span className="watch-price">{item.price}</span><span className={item.up ? "watch-change positive" : "watch-change negative"}>{item.change}</span></button>)}{filteredInstruments.length === 0 && <div className="empty-search">No matching markets</div>}</div><div className="rail-section-heading"><span>SAMPLE AI BRIEF</span><span className="live-dot"/></div><section className="ai-news-card"><div className="ai-card-top"><span className="ai-spark">✳</span><span>SAMPLE FEED</span><span className="news-time">2m</span></div><h3>Bitcoin holds above $85K as ETF inflows return</h3><p>Spot ETF products recorded $420M in net inflows yesterday, their strongest session in two weeks.</p><div className="impact-row"><span>BTCUSD impact</span><span className="impact bullish">BULLISH <i>↗</i></span></div><button className="news-link" onClick={() => setAiOnChart(!aiOnChart)}>{aiOnChart ? "Added to chart ✓" : "Add context to chart +"}</button></section><div className="news-list-title"><span>SAMPLE HEADLINES</span><button className="text-action">All news →</button></div><div className="news-item"><span className="news-source">MARKET DESK <i>· 14m</i></span><p>Fed officials signal patience as inflation cools</p><span className="impact neutral">MACRO</span></div><div className="news-item"><span className="news-source">CRYPTO PULSE <i>· 38m</i></span><p>Ethereum staking queues hit a 3-month high</p><span className="impact bullish">ETHUSD ↗</span></div></>}
+          {watchlistOpen && <>
+            <label className="search-box"><span>⌕</span><input id="market-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search markets"/><kbd>/</kbd></label>
+            <div className="watchlist-columns"><span>SYMBOL</span><span>LAST</span><span>24H</span></div>
+            <div className="watchlist-items">
+              {filteredInstruments.map((item) => <button key={item.symbol} className={symbol.symbol === item.symbol ? "watch-row selected" : "watch-row"} onClick={() => { setSymbol(item); setSection("Markets"); }}><span className={`watch-icon ${item.group.toLowerCase()}`}>{item.icon}</span><span className="watch-symbol"><b>{item.symbol}</b><small>{item.group}</small></span><span className="watch-price">{item.price}</span><span className={item.up ? "watch-change positive" : "watch-change negative"}>{item.change}</span></button>)}
+              {filteredInstruments.length === 0 && <div className="empty-search">No matching markets</div>}
+            </div>
+            <div className="rail-section-heading"><span>AI QUOTE BRIEF</span><span className="live-dot"/></div>
+            <section className="ai-news-card">
+              <div className="ai-card-top"><span className="ai-spark">✳</span><span>DEMO INSIGHT · {symbol.symbol}</span><span className="news-time">NOW</span></div>
+              <h3>{symbol.symbol} · {aiBias}</h3>
+              <p>{aiBrief}</p>
+              <div className="impact-row"><span>Simulated quote</span><span className={`impact ${symbol.up ? "bullish" : "bearish"}`}>{symbol.change}</span></div>
+              <button className="news-link" aria-pressed={aiOnChart} onClick={() => setAiOnChart(!aiOnChart)}>{aiOnChart ? "Remove context from chart" : "Show context on chart +"}</button>
+            </section>
+            <div className="news-list-title"><span>DEMO HEADLINES</span><button className="text-action">All news →</button></div>
+            <div className="news-item"><span className="news-source">MARKET DESK <i>· 14m</i></span><p>Fed officials signal patience as inflation cools</p><span className="impact neutral">MACRO</span></div>
+            <div className="news-item"><span className="news-source">CRYPTO PULSE <i>· 38m</i></span><p>Ethereum staking queues hit a 3-month high</p><span className="impact bullish">ETHUSD ↗</span></div>
+          </>}
         </aside>
       </div>
       <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>Paper trading <b>ON</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
@@ -119,7 +144,44 @@ function Dashboard({ setSection }: { setSection: (section: Section) => void }) {
 }
 function Metric({ label, value, change }: { label: string; value: string; change: string }) { return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small className={change.startsWith("+") ? "positive" : "muted"}>{change}</small></div>; }
 function TradeView({ symbol, orderSide, setOrderSide, orderPlaced, setOrderPlaced }: { symbol: Instrument; orderSide: "Buy" | "Sell"; setOrderSide: (side: "Buy" | "Sell") => void; orderPlaced: boolean; setOrderPlaced: (placed: boolean) => void }) {
-  return <div className="secondary-view trade-view"><div className="trade-intro"><div><span className="small-label">ORDER TICKET</span><h2>Place an order</h2><p>Paper trading account · $24,680.42 available</p></div><span className="paper-tag">PAPER MODE</span></div><div className="trade-layout"><section className="content-card order-card"><div className="side-toggle"><button className={orderSide === "Buy" ? "buy active" : "buy"} onClick={() => setOrderSide("Buy")}>Buy / Long</button><button className={orderSide === "Sell" ? "sell active" : "sell"} onClick={() => setOrderSide("Sell")}>Sell / Short</button></div><label className="field-label">Symbol<select defaultValue={symbol.symbol}>{instruments.map((item) => <option key={item.symbol} value={item.symbol}>{item.symbol} · {item.name}</option>)}</select></label><div className="field-row"><label className="field-label">Order type<select><option>Market</option><option>Limit</option><option>Stop</option><option>Stop limit</option></select></label><label className="field-label">Time in force<select><option>Good for day</option><option>Good till canceled</option></select></label></div><div className="field-row"><label className="field-label">Quantity<input defaultValue="0.025" inputMode="decimal"/></label><label className="field-label">Limit price (USD)<input defaultValue={symbol.price.replace(",", "")} inputMode="decimal"/></label></div><div className="order-estimate"><span>Estimated value</span><b>$2,147.25</b><span>Buying power after order</span><b>$22,533.17</b></div><button className={orderSide === "Buy" ? "submit-order buy-submit" : "submit-order sell-submit"} onClick={() => setOrderPlaced(true)}>{orderPlaced ? "Order submitted ✓" : `${orderSide} ${symbol.symbol}`}</button><small className="disclaimer">Paper order only. No real funds will be used.</small></section><section className="content-card trade-context"><div className="section-title"><div><span className="small-label">MARKET SNAPSHOT</span><h2>{symbol.symbol}</h2></div><span className="positive">{symbol.change}</span></div><strong className="snapshot-price">${symbol.price}</strong><div className="snapshot-row"><span>Bid</span><b>$85,884.00</b><span>Ask</span><b>$85,890.00</b></div><div className="snapshot-row"><span>24h high</span><b>$86,214.00</b><span>24h low</span><b>$84,902.00</b></div><div className="trade-ai-note"><span className="ai-spark">✳</span><div><b>Zuri risk check</b><p>This order is 8.7% of your net liquidation. Your typical position is 5.2%.</p></div></div></section></div><section className="content-card positions-card"><div className="section-title"><div><span className="small-label">PORTFOLIO</span><h2>Open positions</h2></div><span className="muted">3 positions</span></div><PositionsTable/></section></div>;
+  const [tradeSymbol, setTradeSymbol] = useState(symbol);
+  const [quantity, setQuantity] = useState("0.025");
+  const [limitPrice, setLimitPrice] = useState(symbol.price.replace(/,/g, ""));
+  const buyingPower = 24680.42;
+  const quantityValue = Number(quantity);
+  const priceValue = Number(limitPrice);
+  const estimatedValue = quantityValue * priceValue;
+  const validOrder = Number.isFinite(estimatedValue) && estimatedValue > 0;
+  const buyingPowerAfter = Math.max(0, buyingPower - (orderSide === "Buy" && validOrder ? estimatedValue : 0));
+  const quotePrecision = tradeSymbol.group === "Forex" ? 5 : 2;
+  const quotePrice = Number(tradeSymbol.price.replace(/,/g, ""));
+  const spread = quotePrice * (tradeSymbol.group === "Forex" ? 0.0001 : 0.00007);
+  const formatCurrency = (value: number) => `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatQuote = (value: number) => value.toLocaleString("en-US", { minimumFractionDigits: quotePrecision, maximumFractionDigits: quotePrecision });
+
+  return (
+    <div className="secondary-view trade-view">
+      <div className="trade-intro"><div><span className="small-label">ORDER TICKET</span><h2>Place an order</h2><p>Paper trading account · $24,680.42 available</p></div><span className="paper-tag">PAPER MODE</span></div>
+      <div className="trade-layout">
+        <section className="content-card order-card">
+          <div className="side-toggle"><button className={orderSide === "Buy" ? "buy active" : "buy"} onClick={() => setOrderSide("Buy")}>Buy / Long</button><button className={orderSide === "Sell" ? "sell active" : "sell"} onClick={() => setOrderSide("Sell")}>Sell / Short</button></div>
+          <label className="field-label">Symbol<select value={tradeSymbol.symbol} onChange={(event) => { const nextSymbol = instruments.find((item) => item.symbol === event.target.value); if (nextSymbol) { setTradeSymbol(nextSymbol); setLimitPrice(nextSymbol.price.replace(/,/g, "")); } }}>{instruments.map((item) => <option key={item.symbol} value={item.symbol}>{item.symbol} · {item.name}</option>)}</select></label>
+          <div className="field-row"><label className="field-label">Order type<select><option>Market</option><option>Limit</option><option>Stop</option><option>Stop limit</option></select></label><label className="field-label">Time in force<select><option>Good for day</option><option>Good till canceled</option></select></label></div>
+          <div className="field-row"><label className="field-label">Quantity<input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="decimal"/></label><label className="field-label">Limit price (USD)<input value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal"/></label></div>
+          <div className="order-estimate"><span>Estimated value</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Buying power after order</span><b>{formatCurrency(buyingPowerAfter)}</b></div>
+          <button className={orderSide === "Buy" ? "submit-order buy-submit" : "submit-order sell-submit"} disabled={!validOrder} onClick={() => setOrderPlaced(true)}>{orderPlaced ? "Order submitted ✓" : `${orderSide} ${tradeSymbol.symbol}`}</button><small className="disclaimer">Paper order only. No real funds will be used.</small>
+        </section>
+        <section className="content-card trade-context">
+          <div className="section-title"><div><span className="small-label">MARKET SNAPSHOT · DEMO</span><h2>{tradeSymbol.symbol}</h2></div><span className={tradeSymbol.up ? "positive" : "negative"}>{tradeSymbol.change}</span></div>
+          <strong className="snapshot-price">{tradeSymbol.group === "Forex" ? "" : "$"}{tradeSymbol.price}</strong>
+          <div className="snapshot-row"><span>Bid</span><b>{formatQuote(Math.max(0, quotePrice - spread / 2))}</b><span>Ask</span><b>{formatQuote(quotePrice + spread / 2)}</b></div>
+          <div className="snapshot-row"><span>Notional</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Exposure</span><b>{((validOrder ? estimatedValue : 0) / buyingPower * 100).toFixed(1)}%</b></div>
+          <div className="trade-ai-note"><span className="ai-spark">✳</span><div><b>Zuri risk check · demo</b><p>This paper order uses {((validOrder ? estimatedValue : 0) / buyingPower * 100).toFixed(1)}% of the demo account value. Check your size and exit plan before submitting.</p></div></div>
+        </section>
+      </div>
+      <section className="content-card positions-card"><div className="section-title"><div><span className="small-label">PORTFOLIO</span><h2>Open positions</h2></div><span className="muted">3 positions</span></div><PositionsTable/></section>
+    </div>
+  );
 }
 function PositionsTable() {
   const rows = [["BTCUSD", "Long", "$84,620.00", "$85,890.00", "+$126.80", "+1.50%"], ["ETHUSD", "Long", "$2,241.20", "$2,284.60", "+$86.80", "+1.94%"], ["SOLUSD", "Short", "$145.30", "$142.82", "+$49.60", "+1.71%"]];
