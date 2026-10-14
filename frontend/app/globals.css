@@ -158,9 +158,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .watchlist-columns { display: grid; grid-template-columns: 1fr 72px 58px; padding: 2px 7px 7px; color: #788182; font-size: 8px; letter-spacing: .5px; }
 .watchlist-columns span:not(:first-child) { text-align: right; }
 .watchlist-items { border-bottom: 1px solid var(--line); }
-.watch-row { width: 100%; min-height: 48px; display: grid; grid-template-columns: 25px minmax(45px, 1fr) 72px 58px; align-items: center; gap: 3px; padding: 0 6px; border: 0; border-top: 1px solid #222729; background: transparent; cursor: pointer; text-align: left; }
+.watch-row { width: 100%; min-height: 48px; display: grid; grid-template-columns: minmax(0, 1fr) 25px; align-items: center; gap: 3px; padding: 0 6px; border-top: 1px solid #222729; background: transparent; }
 .watch-row:hover { background: #1c2022; }
 .watch-row.selected { background: #202426; box-shadow: inset 2px 0 #b99aff; }
+.watch-row-main { width: 100%; min-width: 0; min-height: 46px; display: grid; grid-template-columns: 25px minmax(45px, 1fr) 72px 58px; align-items: center; gap: 3px; padding: 0; border: 0; background: transparent; cursor: pointer; text-align: left; }
+.watch-row-main:focus-visible, .watch-remove:focus-visible { outline: 2px solid #8e76c5; outline-offset: -2px; }
+.watch-remove { width: 24px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 3px; background: transparent; color: #788282; cursor: pointer; font-size: 17px; }
+.watch-remove:hover { background: #3b2626; color: var(--red); }
 .watch-icon { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #29302f; color: #d9e8e2; font-size: 10px; }
 .watch-icon.crypto { background: #40331f; color: #e9ad4d; }
 .watch-icon.forex { background: #263540; color: #9ec4d9; }
@@ -170,7 +174,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .watch-symbol b { color: #d9dfdd; font-size: 10px; font-weight: 570; }
 .watch-symbol small { color: #717c7c; font-size: 8px; }
 .watch-price { color: #c8cecc; font-family: var(--font-geist-mono), monospace; font-size: 9px; text-align: right; }
+.watch-price.tick-up { animation: quote-tick-up 900ms ease-out; }
+.watch-price.tick-down { animation: quote-tick-down 900ms ease-out; }
 .watch-change { font-family: var(--font-geist-mono), monospace; font-size: 9px; text-align: right; }
+.rail-count { display: flex; align-items: center; gap: 5px; }
+.quote-live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--yellow); animation: quote-live-pulse 1.6s ease-in-out infinite; }
+@keyframes quote-tick-up { from { color: var(--green); } to { color: #c8cecc; } }
+@keyframes quote-tick-down { from { color: var(--red); } to { color: #c8cecc; } }
+@keyframes quote-live-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .watch-price.tick-up, .watch-price.tick-down, .quote-live-dot { animation: none; } }
 .empty-search { padding: 18px 8px; color: #86908f; text-align: center; font-size: 10px; }
 .rail-section-heading, .news-list-title { display: flex; align-items: center; justify-content: space-between; margin: 17px 0 8px; color: #899292; font-size: 9px; font-weight: 650; letter-spacing: .8px; }
 .ai-news-card { padding: 12px; border: 1px solid #3d354a; border-radius: 5px; background: linear-gradient(140deg, #211d29, #191b1e 75%); }
@@ -367,3 +379,60 @@ td b { font-weight: 580; }
 
 .chart-toolbar, .market-summary { display: none; }
 .chart-panel .chart-labels, .chart-panel .chart-footer, .chart-stage .drawing-toolbar { display: none; }
+
+.journal-chart-bar { min-height: 45px; display: flex; align-items: center; gap: 9px; margin-bottom: 8px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: #171a1c; }
+.journal-chart-symbol { display: flex; align-items: center; gap: 7px; min-width: 150px; }
+.journal-chart-symbol > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.journal-chart-symbol b { color: #e0e5e3; font-size: 10px; }
+.journal-chart-symbol small { max-width: 125px; overflow: hidden; color: #758080; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.journal-intervals, .journal-chart-actions { display: flex; align-items: center; gap: 2px; }
+.journal-intervals { min-width: 0; }
+.journal-intervals .time-button { min-width: 27px; padding: 0 4px; }
+.journal-chart-actions { margin-left: auto; }
+.journal-capture-button, .journal-plan-button, .journal-saved-button { min-height: 29px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 8px; border: 1px solid #343a3b; border-radius: 3px; background: #202426; color: #c9d0cd; cursor: pointer; font-size: 9px; white-space: nowrap; }
+.journal-capture-button:hover, .journal-saved-button:hover { border-color: #5d6664; background: #292e30; }
+.journal-plan-button.long { color: var(--green); }
+.journal-plan-button.short { color: var(--red); }
+.journal-saved-button span { color: #a3acaa; font-family: var(--font-geist-mono), monospace; }
+.journal-capture { position: fixed; z-index: 20; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: #07090bd9; backdrop-filter: blur(3px); }
+.journal-capture-heading, .journal-capture-footer, .journal-capture-footer > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.journal-capture-heading { margin-bottom: 16px; }
+.journal-capture-heading h2 { margin: 5px 0 0; font-size: 18px; font-weight: 560; }
+.journal-capture > form, .journal-capture-heading { width: min(100%, 680px); }
+.journal-capture { flex-direction: column; }
+.journal-capture > form { padding: 17px; border: 1px solid #343a3b; border-radius: 5px; background: #171a1c; box-shadow: 0 18px 65px #0008; }
+.journal-capture-heading { width: min(100%, 680px); }
+.journal-fields { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; }
+.journal-fields .field-label { min-width: 0; }
+.journal-fields select, .journal-fields input, .journal-note-field textarea { width: 100%; min-height: 35px; padding: 0 8px; border: 1px solid #333a3b; border-radius: 4px; background: #202426; color: #d9dfdc; font-size: 10px; }
+.journal-note-field textarea { min-height: 90px; padding: 9px; resize: vertical; line-height: 1.5; }
+.journal-note-field { margin-top: 2px; }
+.journal-capture-footer { margin-top: 12px; color: #818b89; font-size: 9px; }
+.journal-view-heading { min-height: 78px; }
+.journal-view-heading h2 { margin: 5px 0 0; font-size: 21px; font-weight: 560; }
+.journal-empty { padding: 28px; }
+.journal-empty h3 { margin: 9px 0 5px; font-size: 16px; font-weight: 560; }
+.journal-empty p { max-width: 430px; margin: 0 0 15px; color: #939d9b; font-size: 11px; line-height: 1.6; }
+.journal-entry-list { display: grid; gap: 8px; }
+.journal-entry { padding: 14px 16px; }
+.journal-entry-heading, .journal-entry-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.journal-entry h3 { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; font-size: 14px; font-weight: 570; }
+.journal-entry-actions { color: #7e8887; font-size: 9px; }
+.journal-entry > p { margin: 12px 0; color: #c3cbc8; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
+.journal-plan-values { display: flex; gap: 22px; padding-top: 10px; border-top: 1px solid #2c3233; color: #828c8a; font-size: 9px; }
+.journal-plan-values b { margin-left: 5px; color: #d0d7d4; font-family: var(--font-geist-mono), monospace; font-weight: 500; }
+.side-pill.watching { background: #303537; color: #c4ccca; }
+
+@media (max-width: 760px) {
+  .journal-chart-bar { flex-wrap: wrap; padding: 7px; }
+  .journal-chart-symbol { flex: 1; }
+  .journal-intervals { order: 3; width: 100%; overflow-x: auto; }
+  .journal-chart-actions { margin-left: 0; }
+  .journal-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .journal-capture { overflow-y: auto; justify-content: flex-start; }
+  .journal-capture-heading { margin-top: auto; }
+  .journal-capture-footer { align-items: flex-start; flex-direction: column; }
+  .journal-entry-heading { align-items: flex-start; }
+  .journal-entry-heading, .journal-entry-actions { flex-wrap: wrap; }
+  .journal-plan-values { flex-wrap: wrap; gap: 10px 18px; }
+}
