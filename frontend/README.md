@@ -20,6 +20,12 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Zuri AI assistant
+
+The floating Zuri assistant sends chat requests to the FastAPI backend at `http://127.0.0.1:8000` by default. Set `NEXT_PUBLIC_BACKEND_URL` in the frontend environment when the backend runs at a different URL. Add the frontend origin to the backend's comma-separated `FRONTEND_ORIGINS` setting if it is not `http://localhost:3000` or `http://127.0.0.1:3000`.
+
+The assistant provides educational trading support and does not submit orders. The workspace's displayed market quotes and account figures are demo data.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
 type SettingsTab = "Account" | "Broker" | "Trading" | "Risk" | "Platform" | "Display" | "Notifications" | "Security";
@@ -300,7 +300,150 @@ export default function Home() {
         </aside>
       </div>
       <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>Paper trading <b>ON</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
+      <AuraAssistant section={section} symbol={symbol} timeframe={timeframe} />
     </main>
+  );
+}
+
+type AuraChatMessage = { id: string; role: "user" | "assistant"; content: string };
+
+function AuraAssistant({ section, symbol, timeframe }: { section: Section; symbol: Instrument; timeframe: string }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [messages, setMessages] = useState<AuraChatMessage[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content: "Hi, I'm Zuri. I can help you think through a trade plan, understand risk, or explain a trading concept. What are you working on?",
+    },
+  ]);
+  const [draft, setDraft] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState("");
+  const messageListRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (isOpen) inputRef.current?.focus();
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (isOpen && messageListRef.current) {
+      messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+    }
+  }, [isOpen, messages, isSending, error]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen]);
+
+  const sendMessage = async (content: string) => {
+    const text = content.trim();
+    if (!text || isSending) return;
+
+    const userMessage: AuraChatMessage = { id: crypto.randomUUID(), role: "user", content: text };
+    const conversation = [
+      ...messages.filter((message) => message.id !== "welcome").slice(-14),
+      userMessage,
+    ].map(({ role, content: messageContent }) => ({ role, content: messageContent }));
+
+    setMessages((current) => [...current, userMessage]);
+    setDraft("");
+    setError("");
+    setIsSending(true);
+
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8000";
+      const response = await fetch(`${backendUrl}/api/assistant/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: conversation,
+          context: { section, symbol: symbol.symbol, timeframe },
+        }),
+      });
+      const result = await response.json() as { reply?: unknown; detail?: unknown };
+      if (!response.ok) {
+        throw new Error(typeof result.detail === "string" ? result.detail : `AI request failed (${response.status}).`);
+      }
+      const reply = result.reply;
+      if (typeof reply !== "string" || !reply.trim()) {
+        throw new Error("Zuri returned an empty reply. Please try again.");
+      }
+      setMessages((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: "assistant", content: reply },
+      ]);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to reach Zuri AI.");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  return (
+    <div className="aura-assistant">
+      {isOpen && (
+        <section className="aura-panel" aria-label="Zuri AI trading companion">
+          <header className="aura-panel-header">
+            <span className="aura-orb aura-orb-small" aria-hidden="true"><span>✦</span></span>
+            <div className="aura-panel-title">
+              <strong>Zuri <span>AI</span></strong>
+              <small>Your trading companion</small>
+            </div>
+            <button className="aura-close" type="button" aria-label="Close Zuri AI" onClick={() => setIsOpen(false)}>×</button>
+          </header>
+          <div className="aura-context">
+            <span className="aura-context-dot" />
+            With you in <b>{section}</b><span>·</span><b>{symbol.symbol}</b><span>·</span>{timeframe}
+          </div>
+          <div className="aura-messages" ref={messageListRef} aria-live="polite">
+            {messages.map((message) => (
+              <div className={`aura-message ${message.role}`} key={message.id}>
+                {message.role === "assistant" && <span className="aura-message-mark" aria-hidden="true">✦</span>}
+                <p>{message.content}</p>
+              </div>
+            ))}
+            {isSending && <div className="aura-typing" role="status"><span /><span /><span /> Zuri is thinking</div>}
+            {error && <p className="aura-error" role="alert">{error}</p>}
+          </div>
+          {messages.length === 1 && (
+            <div className="aura-suggestions">
+              <button type="button" onClick={() => void sendMessage("What should I consider when setting a stop loss?")}>Stop-loss basics</button>
+              <button type="button" onClick={() => void sendMessage(`Help me create a risk checklist for ${symbol.symbol}.`)}>Review my checklist</button>
+            </div>
+          )}
+          <form className="aura-compose" onSubmit={(event) => { event.preventDefault(); void sendMessage(draft); }}>
+            <textarea
+              ref={inputRef}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="Ask Zuri about your trading plan..."
+              aria-label="Message Zuri AI"
+              rows={2}
+              maxLength={2000}
+              disabled={isSending}
+            />
+            <button type="submit" aria-label="Send message" disabled={!draft.trim() || isSending}>↑</button>
+          </form>
+          <p className="aura-disclaimer">Educational support only · no trades are submitted</p>
+        </section>
+      )}
+      <button
+        className={`aura-launcher${isOpen ? " open" : ""}`}
+        type="button"
+        aria-label={isOpen ? "Close Zuri AI assistant" : "Open Zuri AI assistant"}
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((open) => !open)}
+      >
+        <span className="aura-orb" aria-hidden="true"><span>✦</span></span>
+        <span className="aura-launcher-label">{isOpen ? "Close" : "Ask Zuri"}</span>
+      </button>
+    </div>
   );
 }
 

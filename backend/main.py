@@ -1,12 +1,14 @@
 import os
 import json
 from pathlib import Path
+from typing import Literal
 
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from groq import Groq
+from fastapi.middleware.cors import CORSMiddleware
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
@@ -16,6 +18,17 @@ app = FastAPI(
     title="Zuri Execution Engine",
     description="Flawless execution. Unbreakable discipline.",
     version="0.3.0"
+)
+
+allowed_frontend_origins = os.getenv(
+    "FRONTEND_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000",
+).split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in allowed_frontend_origins if origin.strip()],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY")) if os.getenv("GROQ_API_KEY") else None
@@ -49,6 +62,22 @@ class UserPrompt(BaseModel):
     execute: bool = False
 
 
+class AssistantMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=2000)
+
+
+class AssistantContext(BaseModel):
+    section: str = Field(max_length=30)
+    symbol: str = Field(max_length=20)
+    timeframe: str = Field(max_length=10)
+
+
+class AssistantChatRequest(BaseModel):
+    messages: list[AssistantMessage] = Field(min_length=1, max_length=16)
+    context: AssistantContext
+
+
 @app.get("/api/account")
 def get_account_summary():
     headers = get_alpaca_headers()
@@ -62,6 +91,45 @@ def get_account_summary():
         "cash": float(data["cash"]),
         "currency": data["currency"]
     }
+
+
+@app.post("/api/assistant/chat")
+def chat_with_assistant(request: AssistantChatRequest):
+    if request.messages[-1].role != "user":
+        raise HTTPException(status_code=400, detail="The final message must be from the user.")
+
+    system_prompt = (
+        "You are Zuri, a supportive trading companion. Help users understand trading "
+        "concepts, think through a plan, and identify risk questions. Be clear, concise, "
+        "and educational; do not give personalized financial advice or claim certainty. "
+        "Never claim to have placed, changed, or closed an order. You cannot execute trades. "
+        "The user's Zuri workspace currently uses simulated market quotes and demo account "
+        "values, so do not describe its market data as live or use it as factual evidence. "
+        "If asked for a trade decision, help them evaluate their own plan and risks instead "
+        "of telling them what to buy or sell. Current workspace context: "
+        f"section={request.context.section}, symbol={request.context.symbol}, "
+        f"timeframe={request.context.timeframe}."
+    )
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(
+        {"role": message.role, "content": message.content}
+        for message in request.messages
+    )
+
+    try:
+        response = get_groq_client().chat.completions.create(
+            messages=messages,
+            model="openai/gpt-oss-20b",
+            temperature=0.3,
+            max_tokens=600,
+        )
+        reply = response.choices[0].message.content
+        if not reply or not reply.strip():
+            raise ValueError("The AI returned an empty response.")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Zuri AI response failed: {str(e)}")
+
+    return {"reply": reply.strip()}
 
 
 @app.get("/api/positions")
