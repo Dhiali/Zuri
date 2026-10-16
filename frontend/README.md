@@ -26,6 +26,14 @@ The floating Zuri assistant sends chat requests to the FastAPI backend at `http:
 
 The assistant provides educational trading support and does not submit orders. The workspace's displayed market quotes and account figures are demo data.
 
+## Market briefing
+
+The Dashboard and Charts briefing loads attributed headlines from CNBC US Top News and BBC Business/World through the backend's `GET /api/market-news` endpoint. The browser requests updates every five minutes, and the backend caches publisher feeds for five minutes. Stories include a publication time when the publisher provides one, a source label, a link to the original article, and an optional symbol match based on simple headline/excerpt keyword matching.
+
+Use **Ask Zuri** on a story to include its title, excerpt, source, time, and link as context in the assistant conversation. Zuri treats that publisher material as untrusted input and can discuss possible relevance, not confirm causation or predict price direction. A missing feed is reported in the briefing; if all feeds are unavailable, the endpoint returns an error rather than fabricated headlines.
+
+Publisher RSS reuse, attribution, and commercial-use terms have not been cleared for production. Review each publisher's current terms and obtain any required permissions before deploying this feed commercially. The current three-feed set is an initial briefing, not comprehensive real-time financial news.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

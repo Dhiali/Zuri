@@ -209,6 +209,37 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .news-source { color: #bdc4c1; font-size: 8px; font-weight: 650; letter-spacing: .5px; }
 .news-source i { color: #737c7d; font-style: normal; font-weight: 400; letter-spacing: 0; }
 .news-item p { margin: 5px 0 7px; color: #c2c9c6; font-size: 10px; line-height: 1.45; }
+.market-news-panel { min-width: 0; margin-top: 17px; }
+.market-news-panel.dashboard { margin: 0 0 14px; padding: 14px; border: 1px solid #34303c; border-radius: 6px; background: linear-gradient(145deg, #1b1a20, #171a1c 62%); }
+.market-news-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.market-news-heading h2 { margin: 5px 0 3px; color: #e7e1ee; font-size: 13px; font-weight: 570; line-height: 1.35; }
+.market-news-heading p { margin: 0; color: #838b8d; font-size: 9px; line-height: 1.45; }
+.market-news-panel.dashboard .market-news-heading h2 { font-size: 17px; }
+.news-refresh { width: 29px; height: 29px; flex: 0 0 29px; border: 1px solid #49414f; border-radius: 6px; background: #211e26; color: #ceb8f9; cursor: pointer; font-size: 17px; }
+.news-refresh:hover { border-color: #9a7dbd; background: #30283a; }
+.news-refresh:disabled { cursor: progress; opacity: .55; }
+.market-news-story { padding: 11px 0; border-top: 1px solid #292d30; }
+.market-news-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: #7f898b; font-size: 8px; }
+.market-news-source { color: #c9bbde; font-size: 8px; font-weight: 650; letter-spacing: .35px; }
+.market-news-meta time { color: #788183; }
+.market-news-tag { padding: 2px 5px; border: 1px solid #46404f; border-radius: 999px; color: #ceb8f9; font-size: 7px; letter-spacing: .3px; }
+.market-news-tag.global { border-color: #3f4d48; color: #9bd4b9; }
+.market-news-title-link { display: block; margin-top: 6px; color: #e0e3e2; font-size: 10px; font-weight: 570; line-height: 1.5; text-decoration: none; }
+.market-news-title-link:hover, .market-news-actions a:hover { color: #c5a7ff; }
+.market-news-story > p { margin: 5px 0 0; color: #9ea5a5; font-size: 9px; line-height: 1.55; }
+.market-news-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 7px; }
+.market-news-actions button, .market-news-actions a { padding: 0; border: 0; background: transparent; color: #c3a7f4; cursor: pointer; font-size: 8px; text-decoration: none; }
+.market-news-actions a { color: #8d9696; white-space: nowrap; }
+.market-news-state { padding: 14px 7px; color: #929999; font-size: 9px; line-height: 1.5; }
+.market-news-state.error, .market-news-warning { color: #e6b07f; }
+.market-news-warning { margin: 6px 0; font-size: 8px; line-height: 1.5; }
+.market-news-footer { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid #292d30; color: #777f80; font-size: 8px; line-height: 1.4; }
+.market-news-disclaimer { margin: 7px 0 0; color: #72797b; font-size: 8px; line-height: 1.45; }
+.aura-news-context { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 8px 37px 9px 14px; border-bottom: 1px solid #34303b; background: #201d24; }
+.aura-news-context > span { color: #b89adc; font-size: 7px; font-weight: 650; letter-spacing: .6px; }
+.aura-news-context a { overflow: hidden; color: #ded7e7; font-size: 9px; line-height: 1.4; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.aura-news-context a:hover { color: #d2b9ff; }
+.aura-news-context button { position: absolute; top: 8px; right: 10px; width: 23px; height: 23px; border: 1px solid #49414f; border-radius: 5px; background: transparent; color: #aaa0b3; cursor: pointer; font-size: 15px; }
 .statusbar { min-height: 27px; display: flex; align-items: center; gap: 20px; padding: 0 14px; border-top: 1px solid var(--line); background: #151719; color: #899292; font-size: 9px; }
 .statusbar > span { display: flex; align-items: center; gap: 5px; }
 .statusbar b { color: var(--green); font-size: 8px; letter-spacing: .4px; }
@@ -425,6 +456,8 @@ td b { font-weight: 580; }
   .lower-tabs-right { display: none; }
   .below-chart { padding-top: 10px; gap: 9px; }
   .watch-summary, .ai-takeaway { padding: 11px; }
+  .market-news-panel.dashboard { padding: 11px; }
+  .market-news-panel.dashboard .market-news-heading h2 { font-size: 15px; }
   .right-rail { grid-row: 2; grid-column: 1; padding: 0 11px 16px; }
   .right-rail.collapsed { min-height: 54px; }
   .watchlist-items { grid-template-columns: 1fr; }

@@ -7,6 +7,8 @@ type SettingsTab = "Account" | "Broker" | "Trading" | "Risk" | "Platform" | "Dis
 type Instrument = { symbol: string; name: string; price: string; change: string; up: boolean; icon: string; group: string; tickDirection?: "up" | "down"; tickSequence?: number };
 type JournalSide = "Watching" | "Long" | "Short";
 type JournalEntry = { id: string; symbol: string; timeframe: string; side: JournalSide; setup: string; entry: string; stop: string; target: string; note: string; createdAt: string };
+type MarketNewsArticle = { id: string; title: string; summary: string; source: string; published_at: string | null; url: string; related_symbols: string[]; market_wide: boolean };
+type MarketNewsResponse = { articles: MarketNewsArticle[]; fetched_at: string; refresh_after_seconds: number; sources: string[]; warnings: string[] };
 
 const initialInstruments: Instrument[] = [
   { symbol: "BTCUSD", name: "Bitcoin / U.S. Dollar", price: "85,890", change: "+1.22%", up: true, icon: "₿", group: "Crypto" },
@@ -153,6 +155,14 @@ export default function Home() {
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>(readJournalEntries);
   const [journalDraftOpen, setJournalDraftOpen] = useState(false);
   const [journalDraftSide, setJournalDraftSide] = useState<JournalSide>("Watching");
+  const [marketNews, setMarketNews] = useState<MarketNewsResponse | null>(null);
+  const [marketNewsLoading, setMarketNewsLoading] = useState(true);
+  const [marketNewsError, setMarketNewsError] = useState("");
+  const [marketNewsRefresh, setMarketNewsRefresh] = useState(0);
+  const [assistantNewsRequest, setAssistantNewsRequest] = useState<{ article: MarketNewsArticle } | null>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantDraft, setAssistantDraft] = useState("");
+  const marketNewsLoaded = useRef(false);
   const activeSymbol = watchlistSymbols.includes(selectedSymbol) ? selectedSymbol : watchlistInstruments[0]?.symbol ?? initialInstruments[0].symbol;
   const symbol = instruments.find((instrument) => instrument.symbol === activeSymbol) ?? initialInstruments.find((instrument) => instrument.symbol === activeSymbol) ?? initialInstruments[0];
   const aiBias = symbol.up ? "UPWARD BIAS" : "DOWNWARD BIAS";
@@ -170,6 +180,51 @@ export default function Home() {
     }, 1800);
     return () => window.clearInterval(ticker);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchNews = async () => {
+      if (!marketNewsLoaded.current) setMarketNewsLoading(true);
+      try {
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8000";
+        const symbols = JSON.parse(watchlistSnapshot) as string[];
+        const response = await fetch(`${backendUrl}/api/market-news?symbols=${encodeURIComponent(symbols.join(","))}`);
+        const result = await response.json() as MarketNewsResponse & { detail?: string };
+        if (!response.ok) {
+          throw new Error(result.detail || `News request failed (${response.status}).`);
+        }
+        if (!Array.isArray(result.articles) || !Array.isArray(result.sources)) {
+          throw new Error("The market-news service returned an invalid response.");
+        }
+        if (!cancelled) {
+          setMarketNews(result);
+          setMarketNewsError("");
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setMarketNewsError(requestError instanceof Error ? requestError.message : "Unable to load market news.");
+        }
+      } finally {
+        if (!cancelled) {
+          marketNewsLoaded.current = true;
+          setMarketNewsLoading(false);
+        }
+      }
+    };
+
+    void fetchNews();
+    const refreshTimer = window.setInterval(() => void fetchNews(), 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshTimer);
+    };
+  }, [watchlistSnapshot, marketNewsRefresh]);
+
+  const askZuriAboutNews = (article: MarketNewsArticle) => {
+    setAssistantNewsRequest({ article });
+    setAssistantDraft(`Explain what this reported story could mean for ${symbol.symbol}. Separate confirmed information from possible market effects, and include the main risks and uncertainties.`);
+    setAssistantOpen(true);
+  };
 
   const saveJournalEntry = (entry: Omit<JournalEntry, "id" | "createdAt">) => {
     setJournalEntries((current) => [{ ...entry, id: crypto.randomUUID(), createdAt: new Date().toISOString() }, ...current]);
@@ -227,7 +282,19 @@ export default function Home() {
             <div className="below-chart"><section className="watch-summary"><div className="section-title"><div><span className="small-label">YOUR WATCHLIST</span><h2>Market pulse</h2></div><button className="text-action" onClick={() => setWatchlistOpen(!watchlistOpen)}>View watchlist ↗</button></div><div className="pulse-row"><span>Fear & Greed</span><strong>68 <small>Greed</small></strong><div className="sentiment-track"><i/></div><span className="positive">+6 pts</span></div><div className="pulse-row"><span>BTC dominance</span><strong>58.4%</strong><span className="muted">+0.3% this week</span></div></section><section className="ai-takeaway"><div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI AI · DEMO CHART READ</span><span className="confidence">QUOTE CONTEXT</span></div><h2>{symbol.symbol} · {symbol.up ? "Upward" : "Downward"} bias</h2><p>{aiBrief}</p><div className="ai-foot"><span>Based on simulated quote data</span><button className="text-action" onClick={() => setAiExpanded(!aiExpanded)}>{aiExpanded ? "Hide analysis ↑" : "See full analysis →"}</button></div>{aiExpanded && <div className="ai-expanded">This prototype insight reflects the demo quote direction only. It is not live market analysis or a recommendation.</div>}</section></div>
             {journalDraftOpen && <JournalCapture symbol={symbol} timeframe={timeframe} initialSide={journalDraftSide} onSave={saveJournalEntry} onCancel={() => setJournalDraftOpen(false)} />}
           </>}
-          {section === "Dashboard" && <Dashboard setSection={setSection}/>}
+          {section === "Dashboard" && (
+            <Dashboard
+              setSection={setSection}
+              news={marketNews}
+              loading={marketNewsLoading}
+              error={marketNewsError}
+              onRefresh={() => {
+                setMarketNewsLoading(true);
+                setMarketNewsRefresh((value) => value + 1);
+              }}
+              onAskAboutStory={askZuriAboutNews}
+            />
+          )}
           {section === "Trade" && <TradeView symbol={symbol} orderSide={orderSide} setOrderSide={setOrderSide} orderPlaced={orderPlaced} setOrderPlaced={setOrderPlaced}/>}
           {section === "History" && <HistoryView/>}
           {section === "Journal" && <JournalView entries={journalEntries} onNewEntry={() => { setSection("Charts"); setJournalDraftSide("Watching"); setJournalDraftOpen(true); }} onDelete={(id) => setJournalEntries((current) => current.filter((entry) => entry.id !== id))} />}
@@ -293,22 +360,57 @@ export default function Home() {
                 <button className="text-action">Deep dive →</button>
               </div>
             </section>
-            <div className="news-list-title"><span>DEMO HEADLINES</span><button className="text-action">All news →</button></div>
-            <div className="news-item"><span className="news-source">MARKET DESK <i>· 14m</i></span><p>Fed officials signal patience as inflation cools</p><span className="impact neutral">MACRO</span></div>
-            <div className="news-item"><span className="news-source">CRYPTO PULSE <i>· 38m</i></span><p>Ethereum staking queues hit a 3-month high</p><span className="impact bullish">ETHUSD ↗</span></div>
+            <MarketNewsSection
+              variant="charts"
+              symbol={symbol.symbol}
+              news={marketNews}
+              loading={marketNewsLoading}
+              error={marketNewsError}
+              onRefresh={() => setMarketNewsRefresh((value) => value + 1)}
+              onAskAboutStory={askZuriAboutNews}
+            />
           </>}
         </aside>
       </div>
       <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>Paper trading <b>ON</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
-      <AuraAssistant section={section} symbol={symbol} timeframe={timeframe} />
+      <AuraAssistant
+        section={section}
+        symbol={symbol}
+        timeframe={timeframe}
+        newsRequest={assistantNewsRequest}
+        onClearNewsRequest={() => setAssistantNewsRequest(null)}
+        isOpen={assistantOpen}
+        onOpenChange={setAssistantOpen}
+        draft={assistantDraft}
+        setDraft={setAssistantDraft}
+      />
     </main>
   );
 }
 
 type AuraChatMessage = { id: string; role: "user" | "assistant"; content: string };
 
-function AuraAssistant({ section, symbol, timeframe }: { section: Section; symbol: Instrument; timeframe: string }) {
-  const [isOpen, setIsOpen] = useState(false);
+function AuraAssistant({
+  section,
+  symbol,
+  timeframe,
+  newsRequest,
+  onClearNewsRequest,
+  isOpen,
+  onOpenChange,
+  draft,
+  setDraft,
+}: {
+  section: Section;
+  symbol: Instrument;
+  timeframe: string;
+  newsRequest: { article: MarketNewsArticle } | null;
+  onClearNewsRequest: () => void;
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  draft: string;
+  setDraft: (draft: string) => void;
+}) {
   const [messages, setMessages] = useState<AuraChatMessage[]>([
     {
       id: "welcome",
@@ -316,9 +418,9 @@ function AuraAssistant({ section, symbol, timeframe }: { section: Section; symbo
       content: "Hi, I'm Zuri. I can help you think through a trade plan, understand risk, or explain a trading concept. What are you working on?",
     },
   ]);
-  const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState("");
+  const selectedNewsArticle = newsRequest?.article ?? null;
   const messageListRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -335,11 +437,11 @@ function AuraAssistant({ section, symbol, timeframe }: { section: Section; symbo
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setIsOpen(false);
+      if (event.key === "Escape") onOpenChange(false);
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen]);
+  }, [isOpen, onOpenChange]);
 
   const sendMessage = async (content: string) => {
     const text = content.trim();
@@ -363,7 +465,18 @@ function AuraAssistant({ section, symbol, timeframe }: { section: Section; symbo
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: conversation,
-          context: { section, symbol: symbol.symbol, timeframe },
+          context: {
+            section,
+            symbol: symbol.symbol,
+            timeframe,
+            news_article: selectedNewsArticle ? {
+              title: selectedNewsArticle.title,
+              summary: selectedNewsArticle.summary,
+              source: selectedNewsArticle.source,
+              published_at: selectedNewsArticle.published_at,
+              url: selectedNewsArticle.url,
+            } : null,
+          },
         }),
       });
       const result = await response.json() as { reply?: unknown; detail?: unknown };
@@ -395,12 +508,19 @@ function AuraAssistant({ section, symbol, timeframe }: { section: Section; symbo
               <strong>Zuri <span>AI</span></strong>
               <small>Your trading companion</small>
             </div>
-            <button className="aura-close" type="button" aria-label="Close Zuri AI" onClick={() => setIsOpen(false)}>×</button>
+            <button className="aura-close" type="button" aria-label="Close Zuri AI" onClick={() => onOpenChange(false)}>×</button>
           </header>
           <div className="aura-context">
             <span className="aura-context-dot" />
             With you in <b>{section}</b><span>·</span><b>{symbol.symbol}</b><span>·</span>{timeframe}
           </div>
+          {selectedNewsArticle && (
+            <div className="aura-news-context">
+              <span>DISCUSSING NEWS · {selectedNewsArticle.source}</span>
+              <a href={selectedNewsArticle.url} target="_blank" rel="noreferrer">{selectedNewsArticle.title}</a>
+              <button type="button" onClick={onClearNewsRequest} aria-label="Clear selected news context">×</button>
+            </div>
+          )}
           <div className="aura-messages" ref={messageListRef} aria-live="polite">
             {messages.map((message) => (
               <div className={`aura-message ${message.role}`} key={message.id}>
@@ -438,7 +558,7 @@ function AuraAssistant({ section, symbol, timeframe }: { section: Section; symbo
         type="button"
         aria-label={isOpen ? "Close Zuri AI assistant" : "Open Zuri AI assistant"}
         aria-expanded={isOpen}
-        onClick={() => setIsOpen((open) => !open)}
+        onClick={() => onOpenChange(!isOpen)}
       >
         <span className="aura-orb" aria-hidden="true"><span>✦</span></span>
         <span className="aura-launcher-label">{isOpen ? "Close" : "Ask Zuri"}</span>
@@ -483,8 +603,131 @@ function JournalView({ entries, onNewEntry, onDelete }: { entries: JournalEntry[
   );
 }
 
-function Dashboard({ setSection }: { setSection: (section: Section) => void }) {
-  return <div className="secondary-view"><div className="dashboard-greeting"><div><span className="small-label">FRIDAY, OCTOBER 02, 2026</span><h2>Good afternoon, Jordan.</h2><p>Here’s the signal behind your numbers today.</p></div><button className="solid-button" onClick={() => setSection("Trade")}>＋ <span>New order</span></button></div><div className="stat-grid"><Metric label="Net liquidation" value="$24,680.42" change="+$1,284.20 (5.49%)"/><Metric label="Today's P&L" value="+$284.60" change="+1.17% today"/><Metric label="Win rate" value="64.8%" change="Last 30 days"/><Metric label="Open positions" value="3" change="$8,420 deployed"/></div><div className="dashboard-columns"><section className="content-card performance-card"><div className="section-title"><div><span className="small-label">PORTFOLIO PERFORMANCE</span><h2>Account growth</h2></div><select aria-label="Performance period"><option>30 days</option><option>90 days</option><option>1 year</option></select></div><div className="performance-total">$24,680 <span>+5.49%</span></div><div className="performance-chart"><svg viewBox="0 0 700 190" preserveAspectRatio="none" aria-label="Portfolio growth line"><defs><linearGradient id="performance-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#38c49a" stopOpacity=".22"/><stop offset="1" stopColor="#38c49a" stopOpacity="0"/></linearGradient></defs><path d="M0 156 C45 151 54 132 92 140 S145 112 179 127 S236 90 265 106 S315 72 347 87 S395 69 425 78 S467 42 510 55 S551 38 582 48 S635 19 700 24 L700 190 L0 190Z" fill="url(#performance-fill)"/><path d="M0 156 C45 151 54 132 92 140 S145 112 179 127 S236 90 265 106 S315 72 347 87 S395 69 425 78 S467 42 510 55 S551 38 582 48 S635 19 700 24" fill="none" stroke="#39c99e" strokeWidth="2.5"/></svg></div><div className="performance-dates"><span>SEP 03</span><span>SEP 10</span><span>SEP 17</span><span>SEP 24</span><span>OCT 02</span></div></section><section className="content-card advice-card"><div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI · ACCOUNT COACH</span></div><h2>Protect your gains on high-volatility days.</h2><p>Your average position size is 28% larger than last month. On days your exposure exceeds $7,500, your drawdown has historically doubled.</p><div className="advice-stat"><span>Current exposure</span><b>$8,420 <i>Above your $7,500 threshold</i></b></div><button className="outline-button">Review open positions →</button><small>Based on your last 90 days · Not financial advice</small></section></div><section className="content-card positions-card"><div className="section-title"><div><span className="small-label">ACCOUNT</span><h2>Open positions</h2></div><button className="text-action" onClick={() => setSection("Trade")}>Trade →</button></div><PositionsTable/></section></div>;
+function MarketNewsSection({
+  variant,
+  symbol,
+  news,
+  loading,
+  error,
+  onRefresh,
+  onAskAboutStory,
+}: {
+  variant: "charts" | "dashboard";
+  symbol?: string;
+  news: MarketNewsResponse | null;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+  onAskAboutStory: (article: MarketNewsArticle) => void;
+}) {
+  const visibleArticles = (news?.articles ?? [])
+    .filter((article) => variant === "dashboard" || article.market_wide || article.related_symbols.includes(symbol ?? ""))
+    .slice(0, variant === "dashboard" ? 8 : 6);
+
+  return (
+    <section className={`market-news-panel ${variant}`} aria-labelledby={`market-news-title-${variant}`}>
+      <div className="market-news-heading">
+        <div>
+          <span className="small-label">ZURI MARKET INTELLIGENCE</span>
+          <h2 id={`market-news-title-${variant}`}>{variant === "charts" ? `${symbol} & global briefing` : "Global & watchlist briefing"}</h2>
+          <p>External events and reporting that may matter to your markets.</p>
+        </div>
+        <button className="news-refresh" type="button" onClick={onRefresh} disabled={loading} aria-label="Refresh market news" title="Refresh market news">↻</button>
+      </div>
+      {news?.warnings.length ? <p className="market-news-warning">Some sources are temporarily unavailable: {news.warnings.join(", ")}.</p> : null}
+      {error && !news ? <div className="market-news-state error" role="alert">{error}</div> : null}
+      {error && news ? <p className="market-news-warning" role="status">Could not refresh the briefing; showing previously loaded stories. {error}</p> : null}
+      {loading && !news ? <div className="market-news-state">Loading current headlines from the news sources…</div> : null}
+      {!loading && !error && visibleArticles.length === 0 ? (
+        <div className="market-news-state">No matching recent headlines were found. Try refreshing later.</div>
+      ) : null}
+      <div className="market-news-list">
+        {visibleArticles.map((article) => (
+          <article className="market-news-story" key={article.id}>
+            <div className="market-news-meta">
+              <span className="market-news-source">{article.source}</span>
+              <time dateTime={article.published_at ?? undefined}>
+                {article.published_at
+                  ? new Date(article.published_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+                  : "Publication time unavailable"}
+              </time>
+              {article.market_wide && <span className="market-news-tag global">GLOBAL</span>}
+              {article.related_symbols.map((relatedSymbol) => <span className="market-news-tag" key={relatedSymbol}>{relatedSymbol}</span>)}
+            </div>
+            <a className="market-news-title-link" href={article.url} target="_blank" rel="noreferrer">{article.title}</a>
+            {article.summary && <p>{article.summary}</p>}
+            <div className="market-news-actions">
+              <button type="button" onClick={() => onAskAboutStory(article)}>Ask Zuri what this could mean →</button>
+              <a href={article.url} target="_blank" rel="noreferrer" aria-label={`Read source article: ${article.title}`}>Read source ↗</a>
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className="market-news-footer">
+        <span>Sources: CNBC, BBC · headlines and excerpts link to publishers</span>
+        {news && <span>Updated {new Date(news.fetched_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} · refreshes every 5 min</span>}
+      </div>
+      <p className="market-news-disclaimer">Headlines are not forecasts. Zuri’s explanation is an AI interpretation, not a prediction or financial advice.</p>
+    </section>
+  );
+}
+
+function Dashboard({
+  setSection,
+  news,
+  loading,
+  error,
+  onRefresh,
+  onAskAboutStory,
+}: {
+  setSection: (section: Section) => void;
+  news: MarketNewsResponse | null;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+  onAskAboutStory: (article: MarketNewsArticle) => void;
+}) {
+  return (
+    <div className="secondary-view">
+      <div className="dashboard-greeting">
+        <div><span className="small-label">FRIDAY, OCTOBER 02, 2026</span><h2>Good afternoon, Jordan.</h2><p>Here’s the signal behind your numbers today.</p></div>
+        <button className="solid-button" onClick={() => setSection("Trade")}>＋ <span>New order</span></button>
+      </div>
+      <MarketNewsSection variant="dashboard" news={news} loading={loading} error={error} onRefresh={onRefresh} onAskAboutStory={onAskAboutStory} />
+      <div className="stat-grid">
+        <Metric label="Net liquidation" value="$24,680.42" change="+$1,284.20 (5.49%)"/>
+        <Metric label="Today's P&L" value="+$284.60" change="+1.17% today"/>
+        <Metric label="Win rate" value="64.8%" change="Last 30 days"/>
+        <Metric label="Open positions" value="3" change="$8,420 deployed"/>
+      </div>
+      <div className="dashboard-columns">
+        <section className="content-card performance-card">
+          <div className="section-title"><div><span className="small-label">PORTFOLIO PERFORMANCE</span><h2>Account growth</h2></div><select aria-label="Performance period"><option>30 days</option><option>90 days</option><option>1 year</option></select></div>
+          <div className="performance-total">$24,680 <span>+5.49%</span></div>
+          <div className="performance-chart">
+            <svg viewBox="0 0 700 190" preserveAspectRatio="none" aria-label="Portfolio growth line">
+              <defs><linearGradient id="performance-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#38c49a" stopOpacity=".22"/><stop offset="1" stopColor="#38c49a" stopOpacity="0"/></linearGradient></defs>
+              <path d="M0 156 C45 151 54 132 92 140 S145 112 179 127 S236 90 265 106 S315 72 347 87 S395 69 425 78 S467 42 510 55 S551 38 582 48 S635 19 700 24 L700 190 L0 190Z" fill="url(#performance-fill)"/>
+              <path d="M0 156 C45 151 54 132 92 140 S145 112 179 127 S236 90 265 106 S315 72 347 87 S395 69 425 78 S467 42 510 55 S551 38 582 48 S635 19 700 24" fill="none" stroke="#39c99e" strokeWidth="2.5"/>
+            </svg>
+          </div>
+          <div className="performance-dates"><span>SEP 03</span><span>SEP 10</span><span>SEP 17</span><span>SEP 24</span><span>OCT 02</span></div>
+        </section>
+        <section className="content-card advice-card">
+          <div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI · ACCOUNT COACH</span></div>
+          <h2>Protect your gains on high-volatility days.</h2>
+          <p>Your average position size is 28% larger than last month. On days your exposure exceeds $7,500, your drawdown has historically doubled.</p>
+          <div className="advice-stat"><span>Current exposure</span><b>$8,420 <i>Above your $7,500 threshold</i></b></div>
+          <button className="outline-button">Review open positions →</button>
+          <small>Based on your last 90 days · Not financial advice</small>
+        </section>
+      </div>
+      <section className="content-card positions-card">
+        <div className="section-title"><div><span className="small-label">ACCOUNT</span><h2>Open positions</h2></div><button className="text-action" onClick={() => setSection("Trade")}>Trade →</button></div>
+        <PositionsTable/>
+      </section>
+    </div>
+  );
 }
 function Metric({ label, value, change }: { label: string; value: string; change: string }) { return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small className={change.startsWith("+") ? "positive" : "muted"}>{change}</small></div>; }
 function TradeView({ symbol, orderSide, setOrderSide, orderPlaced, setOrderPlaced }: { symbol: Instrument; orderSide: "Buy" | "Sell"; setOrderSide: (side: "Buy" | "Sell") => void; orderPlaced: boolean; setOrderPlaced: (placed: boolean) => void }) {
