@@ -598,6 +598,13 @@ td b { font-weight: 580; }
 .auth-form input::placeholder { color: #687170; }
 .auth-form input:focus { border-color: #8e76c5; }
 .auth-form .auth-submit { margin-top: 3px; }
+.social-signin-options { display: grid; gap: 8px; margin-top: 14px; }
+.social-signin-button { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 0 12px; border: 1px solid #373c3d; border-radius: 4px; background: #1a1d1f; color: #dce0df; cursor: pointer; font-size: 10px; font-weight: 550; transition: border-color .15s ease, background .15s ease; }
+.social-signin-button:hover:not(:disabled) { border-color: #66616e; background: #232527; }
+.social-signin-button:disabled { cursor: wait; opacity: .62; }
+.social-signin-button svg { width: 17px; height: 17px; flex: 0 0 17px; }
+.auth-divider { display: flex; align-items: center; gap: 11px; margin: 17px 0; color: #737c7b; font-size: 8px; }
+.auth-divider::before, .auth-divider::after { height: 1px; flex: 1; content: ""; background: #303536; }
 .auth-forgot, .auth-switch button { justify-self: end; border: 0; padding: 0; background: transparent; color: #bca3ec; cursor: pointer; font-size: 9px; }
 .auth-switch { margin-top: 19px; color: #858e8d; text-align: center; font-size: 9px; }
 .auth-switch button { margin-left: 4px; font-weight: 600; }

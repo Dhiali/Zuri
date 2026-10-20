@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Confirm your Zuri account</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f3f3f6;font-family:Arial,Helvetica,sans-serif;color:#202124;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">Confirm your email to finish setting up your Zuri account.</div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f3f3f6;">
+      <tr>
+        <td align="center" style="padding:40px 16px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background-color:#ffffff;border:1px solid #e7e5eb;border-radius:10px;">
+            <tr>
+              <td style="padding:30px 36px 0;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td align="center" width="34" height="34" style="width:34px;height:34px;border-radius:9px;background-color:#c1a0ff;color:#19151e;font-family:Georgia,serif;font-size:24px;font-weight:bold;">z</td>
+                    <td style="padding-left:10px;color:#202124;font-size:20px;font-weight:bold;letter-spacing:-.5px;">zuri<span style="color:#48a889;">.</span></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px 36px 12px;">
+                <p style="margin:0 0 9px;color:#77658e;font-size:11px;font-weight:bold;letter-spacing:1.2px;">YOUR TRADING DESK STARTS HERE</p>
+                <h1 style="margin:0;color:#202124;font-size:26px;line-height:1.25;font-weight:600;">Confirm your email</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 36px 4px;color:#555b5d;font-size:15px;line-height:1.7;">
+                <p style="margin:0 0 18px;">Thanks for creating a Zuri account. Confirm that this is your email address to finish setting up your account.</p>
+                <p style="margin:0 0 24px;">If you did not create a Zuri account, you can ignore this message. Your email address will not be confirmed.</p>
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td align="center" style="border-radius:5px;background-color:#b99aff;">
+                      <a href="{{ .ConfirmationURL }}" style="display:inline-block;padding:13px 21px;border:1px solid #b99aff;border-radius:5px;color:#211b2b;font-size:14px;font-weight:bold;text-decoration:none;">Verify my email</a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:24px 0 0;color:#777d7e;font-size:12px;line-height:1.6;">This secure link is intended for you and may expire. If the button does not work, copy and paste this address into your browser:</p>
+                <p style="margin:7px 0 0;overflow-wrap:anywhere;font-size:12px;line-height:1.6;"><a href="{{ .ConfirmationURL }}" style="color:#7459a6;">{{ .ConfirmationURL }}</a></p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:28px 36px 30px;">
+                <div style="height:1px;background-color:#eceaef;"></div>
+                <p style="margin:17px 0 0;color:#818789;font-size:11px;line-height:1.6;">Zuri Markets<br>Educational trading workspace. Market data may be simulated. Zuri does not provide investment advice.</p>
+                <p style="margin:10px 0 0;color:#9a9fa0;font-size:10px;line-height:1.5;">This is an automated account security message. Replies to this email are not monitored.</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

@@ -16,6 +16,7 @@ import { getSupabaseBrowserClient, isSupabaseConfigured } from "./supabase";
 type AuthStatus = "loading" | "welcome" | "sign-in" | "sign-up" | "onboarding" | "workspace" | "reset-password";
 type Experience = "New to trading" | "Learning the basics" | "Experienced";
 type Market = "Stocks" | "Crypto" | "Forex" | "Commodities";
+type SocialProvider = "google";
 
 type AuthContextValue = {
   session: Session | null;
@@ -41,6 +42,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activeProvider, setActiveProvider] = useState<SocialProvider | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -140,6 +142,30 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
       setError(authError instanceof Error ? authError.message : "Unable to complete sign-in. Please try again.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const startSocialSignIn = async (provider: SocialProvider) => {
+    setError("");
+    setMessage("");
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setError("Connect Zuri to Supabase first. Add the two Supabase values to frontend/.env.local and backend/.env, then restart the apps.");
+      return;
+    }
+
+    setBusy(true);
+    setActiveProvider(provider);
+    try {
+      const { error: authError } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo: window.location.origin },
+      });
+      if (authError) throw authError;
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : `Unable to sign in with ${provider}. Please try again.`);
+      setBusy(false);
+      setActiveProvider(null);
     }
   };
 
@@ -277,6 +303,8 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                   <p>Bring your market watch, trade plans, and AI context into one calmer workspace.</p>
                   <button type="button" className="auth-submit" onClick={() => switchStatus("sign-up")}>Create your account <span>→</span></button>
                   <button type="button" className="auth-secondary" onClick={() => switchStatus("sign-in")}>I already have an account</button>
+                  {error && <div className="auth-error" role="alert">{error}</div>}
+                  <SocialSignInButtons disabled={busy} activeProvider={activeProvider} onProvider={startSocialSignIn} />
                   {!isSupabaseConfigured && <div className="auth-setup-note"><b>One quick setup step remains</b><span>Connect Zuri to Supabase to enable secure accounts. See the setup steps in the frontend README.</span></div>}
                   <div className="auth-fineprint">By continuing, you agree to use Zuri as an educational demo workspace. Market data shown here may be simulated.</div>
                 </>
@@ -289,6 +317,8 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                   <p>{status === "sign-up" ? "Your personal trading workspace is a few steps away." : "Pick up where you left off."}</p>
                   {message && <div className="auth-message" role="status">{message}</div>}
                   {error && <div className="auth-error" role="alert">{error}</div>}
+                  <SocialSignInButtons disabled={busy} activeProvider={activeProvider} onProvider={startSocialSignIn} />
+                  <div className="auth-divider"><span>or continue with email</span></div>
                   <form className="auth-form" onSubmit={handleAuth}>
                     <label>Email address<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required /></label>
                     <label>Password<input type="password" autoComplete={status === "sign-up" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={status === "sign-up" ? "At least 8 characters" : "Your password"} minLength={status === "sign-up" ? 8 : undefined} required /></label>
@@ -334,5 +364,24 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
         </main>
       )}
     </AuthContext.Provider>
+  );
+}
+
+function SocialSignInButtons({
+  disabled,
+  activeProvider,
+  onProvider,
+}: {
+  disabled: boolean;
+  activeProvider: SocialProvider | null;
+  onProvider: (provider: SocialProvider) => void;
+}) {
+  return (
+    <div className="social-signin-options">
+      <button type="button" className="social-signin-button" disabled={disabled} onClick={() => onProvider("google")}>
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11a9.4 9.4 0 0 1-4.1 6.2v5h6.6c3.9-3.6 6.1-8.8 6.1-14.9Z"/><path fill="#34A853" d="M24 44c5.5 0 10.1-1.8 13.5-4.8l-6.6-5c-1.8 1.2-4.1 1.9-6.9 1.9-5.3 0-9.9-3.6-11.5-8.5H5.7v5.2A20 20 0 0 0 24 44Z"/><path fill="#FBBC05" d="M12.5 27.6a12 12 0 0 1 0-7.2v-5.2H5.7a20 20 0 0 0 0 17.6l6.8-5.2Z"/><path fill="#EA4335" d="M24 11.9c3 0 5.7 1 7.8 3.1l5.8-5.8A19.3 19.3 0 0 0 24 4 20 20 0 0 0 5.7 15.2l6.8 5.2c1.6-4.9 6.2-8.5 11.5-8.5Z"/></svg>
+        {activeProvider === "google" ? "Connecting to Google…" : "Continue with Google"}
+      </button>
+    </div>
   );
 }
