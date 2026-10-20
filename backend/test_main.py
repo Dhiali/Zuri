@@ -7,6 +7,47 @@ import requests
 from fastapi.testclient import TestClient
 
 
+class AuthenticationTests(unittest.TestCase):
+    def setUp(self):
+        from backend.main import app, require_authenticated_user
+
+        self.app = app
+        self.require_authenticated_user = require_authenticated_user
+        self.client = TestClient(app)
+        app.dependency_overrides[require_authenticated_user] = lambda: {"id": "test-user"}
+
+    def tearDown(self):
+        self.app.dependency_overrides.pop(self.require_authenticated_user, None)
+
+    def test_protected_endpoints_reject_requests_without_a_bearer_token(self):
+        self.app.dependency_overrides.pop(self.require_authenticated_user, None)
+
+        response = self.client.get("/api/account")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["detail"], "Sign in to use this endpoint.")
+
+    @patch("backend.main.requests.get")
+    def test_bearer_token_is_verified_with_supabase(self, get):
+        from backend.main import require_authenticated_user
+
+        get.return_value = SimpleNamespace(status_code=200, json=lambda: {"id": "user-123"})
+        with patch("backend.main.SUPABASE_URL", "https://example.supabase.co"), patch(
+            "backend.main.SUPABASE_ANON_KEY", "public-anon-key"
+        ):
+            user = require_authenticated_user("Bearer valid-session-token")
+
+        self.assertEqual(user["id"], "user-123")
+        get.assert_called_once_with(
+            "https://example.supabase.co/auth/v1/user",
+            headers={
+                "apikey": "public-anon-key",
+                "Authorization": "Bearer valid-session-token",
+            },
+            timeout=5,
+        )
+
+
 class GroqConfigTests(unittest.TestCase):
     def test_import_without_groq_key_does_not_crash(self):
         os.environ.pop("GROQ_API_KEY", None)
@@ -16,9 +57,16 @@ class GroqConfigTests(unittest.TestCase):
 
 class AssistantChatTests(unittest.TestCase):
     def setUp(self):
-        from backend.main import app
+        from backend.main import app, require_authenticated_user
 
+        self.app = app
         self.client = TestClient(app)
+        app.dependency_overrides[require_authenticated_user] = lambda: {"id": "test-user"}
+
+    def tearDown(self):
+        from backend.main import require_authenticated_user
+
+        self.app.dependency_overrides.pop(require_authenticated_user, None)
 
     @patch("backend.main.get_groq_client")
     def test_chat_returns_ai_reply_with_workspace_context(self, get_client):
@@ -99,9 +147,16 @@ class AssistantChatTests(unittest.TestCase):
 
 class MarketNewsTests(unittest.TestCase):
     def setUp(self):
-        from backend.main import app
+        from backend.main import app, require_authenticated_user
 
+        self.app = app
         self.client = TestClient(app)
+        app.dependency_overrides[require_authenticated_user] = lambda: {"id": "test-user"}
+
+    def tearDown(self):
+        from backend.main import require_authenticated_user
+
+        self.app.dependency_overrides.pop(require_authenticated_user, None)
 
     @patch("backend.main._get_cached_news")
     def test_news_endpoint_returns_matching_and_market_wide_stories(self, get_news):

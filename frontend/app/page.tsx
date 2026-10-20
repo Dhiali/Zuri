@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useZuriAuth, ZuriAuthGate } from "./auth";
 
 type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
 type SettingsTab = "Account" | "Broker" | "Trading" | "Risk" | "Platform" | "Display" | "Notifications" | "Security";
@@ -138,6 +139,16 @@ function Chart({ symbol, timeframe, drawing, aiOnChart }: { symbol: Instrument; 
 }
 
 export default function Home() {
+  return (
+    <ZuriAuthGate>
+      <TradingWorkspace />
+    </ZuriAuthGate>
+  );
+}
+
+function TradingWorkspace() {
+  const { session, signOut } = useZuriAuth();
+  const [accountError, setAccountError] = useState("");
   const [section, setSection] = useState<Section>("Charts");
   const [instruments, setInstruments] = useState(initialInstruments);
   const watchlistSnapshot = useSyncExternalStore(subscribeToWatchlist, getWatchlistSnapshot, getServerWatchlistSnapshot);
@@ -255,7 +266,7 @@ export default function Home() {
         <a className="brand" href="#charts" onClick={() => setSection("Charts")}><span className="brand-mark">z</span><span>zuri<span className="brand-dot">.</span></span></a>
         <div className="top-divider" />
         <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">PAPER · DEMO</span></div>
-        <div className="topbar-right"><button className="icon-action" title="Search markets" onClick={() => document.getElementById("market-search")?.focus()}>⌕</button><button className="icon-action notification" title="Notifications">♧<i /></button><div className="avatar">JD</div></div>
+        <div className="topbar-right"><button className="icon-action" title="Search markets" onClick={() => document.getElementById("market-search")?.focus()}>⌕</button><button className="icon-action notification" title="Notifications">♧<i /></button><span className="topbar-email">{session?.user.email}</span><button className="signout-button" onClick={async () => { try { await signOut(); } catch (signOutError) { setAccountError(signOutError instanceof Error ? signOutError.message : "Unable to sign out."); } }}>Sign out</button>{accountError && <span className="topbar-auth-error" role="alert">{accountError}</span>}</div>
       </header>
       <div className="workspace">
         <nav className="primary-nav" aria-label="Primary navigation">
@@ -377,6 +388,7 @@ export default function Home() {
         section={section}
         symbol={symbol}
         timeframe={timeframe}
+        accessToken={session?.access_token ?? ""}
         newsRequest={assistantNewsRequest}
         onClearNewsRequest={() => setAssistantNewsRequest(null)}
         isOpen={assistantOpen}
@@ -394,6 +406,7 @@ function AuraAssistant({
   section,
   symbol,
   timeframe,
+  accessToken,
   newsRequest,
   onClearNewsRequest,
   isOpen,
@@ -404,6 +417,7 @@ function AuraAssistant({
   section: Section;
   symbol: Instrument;
   timeframe: string;
+  accessToken: string;
   newsRequest: { article: MarketNewsArticle } | null;
   onClearNewsRequest: () => void;
   isOpen: boolean;
@@ -462,7 +476,10 @@ function AuraAssistant({
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8000";
       const response = await fetch(`${backendUrl}/api/assistant/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
         body: JSON.stringify({
           messages: conversation,
           context: {

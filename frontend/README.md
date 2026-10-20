@@ -20,6 +20,21 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Sign-in and first-time setup
+
+Zuri uses Supabase Auth for email/password accounts. The public welcome screen leads into sign-up or sign-in; new accounts complete a short onboarding flow before entering the workspace. Email confirmation and password reset are supported. Onboarding preferences are saved to the signed-in user's Supabase metadata.
+
+To connect authentication:
+
+1. Create a Supabase project and enable the **Email** sign-in provider under **Authentication → Providers**.
+2. In **Authentication → URL Configuration**, set the local Site URL to `http://localhost:3000` and add both `http://localhost:3000` and `http://127.0.0.1:3000` to the redirect URL allow list.
+3. Copy the project's URL and its publishable (or legacy anon) key from the Supabase project settings. Copy the publishable/anon key only; never put a `service_role` or secret key in the frontend.
+4. Copy `frontend/.env.example` to `frontend/.env.local` and fill in `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+5. Copy `backend/.env.example` to `backend/.env` and fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY` with the same project values. Keep any existing private integration keys in this file.
+6. Restart both development servers, then create an account from the Zuri welcome screen. If email confirmation is enabled, confirm your address before signing in.
+
+The backend verifies Supabase access tokens for account, position, order, trade-execution, and AI-chat endpoints. Market news remains public. The browser-side workspace gate is for navigation; backend token verification is the security boundary. The current workspace still contains simulated account and quote data, and account onboarding does not connect a brokerage account.
+
 ## Zuri AI assistant
 
 The floating Zuri assistant sends chat requests to the FastAPI backend at `http://127.0.0.1:8000` by default. Set `NEXT_PUBLIC_BACKEND_URL` in the frontend environment when the backend runs at a different URL. Add the frontend origin to the backend's comma-separated `FRONTEND_ORIGINS` setting if it is not `http://localhost:3000` or `http://127.0.0.1:3000`.

@@ -17,7 +17,7 @@ from threading import Lock
 
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from groq import Groq
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,7 +42,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in allowed_frontend_origins if origin.strip()],
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY")) if os.getenv("GROQ_API_KEY") else None
@@ -51,6 +51,8 @@ ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 ALPACA_DATA_URL = "https://data.alpaca.markets"
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 
 MAX_RISK_PERCENTAGE_CAP = 3.0
 
@@ -69,6 +71,38 @@ def get_groq_client():
     if groq_client is None:
         raise HTTPException(status_code=503, detail="GROQ_API_KEY is missing. Add it to your environment or .env file.")
     return groq_client
+
+
+def require_authenticated_user(authorization: str | None = Header(default=None)):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Sign in to use this endpoint.")
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        raise HTTPException(status_code=503, detail="Supabase authentication is not configured on the backend.")
+
+    try:
+        response = requests.get(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": authorization,
+            },
+            timeout=5,
+        )
+    except requests.RequestException as e:
+        logger.error("Supabase token verification failed: %s", e)
+        raise HTTPException(status_code=503, detail="Unable to verify your session. Please try again.") from e
+
+    if response.status_code in (401, 403):
+        raise HTTPException(status_code=401, detail="Your session is invalid or expired. Please sign in again.")
+    if response.status_code != 200:
+        logger.error("Supabase token verification returned HTTP %s.", response.status_code)
+        raise HTTPException(status_code=503, detail="Unable to verify your session. Please try again.")
+
+    user = response.json()
+    if not isinstance(user, dict) or not isinstance(user.get("id"), str):
+        logger.error("Supabase token verification returned an invalid user response.")
+        raise HTTPException(status_code=502, detail="The authentication service returned an invalid response.")
+    return user
 
 
 class UserPrompt(BaseModel):
@@ -273,7 +307,7 @@ class AssistantChatRequest(BaseModel):
     context: AssistantContext
 
 
-@app.get("/api/account")
+@app.get("/api/account", dependencies=[Depends(require_authenticated_user)])
 def get_account_summary():
     headers = get_alpaca_headers()
     res = requests.get(f"{ALPACA_BASE_URL}/v2/account", headers=headers)
@@ -323,7 +357,7 @@ def get_market_news(symbols: str = Query(default="", max_length=200)):
     }
 
 
-@app.post("/api/assistant/chat")
+@app.post("/api/assistant/chat", dependencies=[Depends(require_authenticated_user)])
 def chat_with_assistant(request: AssistantChatRequest):
     if request.messages[-1].role != "user":
         raise HTTPException(status_code=400, detail="The final message must be from the user.")
@@ -394,7 +428,7 @@ def chat_with_assistant(request: AssistantChatRequest):
     return {"reply": reply.strip()}
 
 
-@app.get("/api/positions")
+@app.get("/api/positions", dependencies=[Depends(require_authenticated_user)])
 def get_open_positions():
     headers = get_alpaca_headers()
     res = requests.get(f"{ALPACA_BASE_URL}/v2/positions", headers=headers)
@@ -416,7 +450,7 @@ def get_open_positions():
     return {"positions": positions}
 
 
-@app.get("/api/orders")
+@app.get("/api/orders", dependencies=[Depends(require_authenticated_user)])
 def get_open_orders():
     headers = get_alpaca_headers()
     res = requests.get(f"{ALPACA_BASE_URL}/v2/orders?status=open", headers=headers)
@@ -436,7 +470,7 @@ def get_open_orders():
     return {"orders": orders}
 
 
-@app.delete("/api/close-all")
+@app.delete("/api/close-all", dependencies=[Depends(require_authenticated_user)])
 def close_all_positions():
     headers = get_alpaca_headers()
     cancel_res = requests.delete(f"{ALPACA_BASE_URL}/v2/orders", headers=headers)
@@ -452,7 +486,7 @@ def close_all_positions():
     }
 
 
-@app.post("/api/parse-trade")
+@app.post("/api/parse-trade", dependencies=[Depends(require_authenticated_user)])
 def parse_and_execute_trade(request: UserPrompt):
     system_prompt = """
     You are Zuri's execution engine parser. Extract trade details from the user prompt into raw JSON:
