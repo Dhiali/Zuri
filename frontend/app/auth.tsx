@@ -18,6 +18,8 @@ type Experience = "New to trading" | "Learning the basics" | "Experienced";
 type Market = "Stocks" | "Crypto" | "Forex" | "Commodities";
 type SocialProvider = "google";
 
+const MIN_SPLASH_DURATION_MS = 3200;
+
 type AuthContextValue = {
   session: Session | null;
   signOut: () => Promise<void>;
@@ -39,6 +41,7 @@ function statusForSession(session: Session | null): AuthStatus {
 export function ZuriAuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [status, setStatus] = useState<AuthStatus>(isSupabaseConfigured ? "loading" : "welcome");
+  const [splashReady, setSplashReady] = useState(!isSupabaseConfigured);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -48,6 +51,12 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
   const [name, setName] = useState("");
   const [experience, setExperience] = useState<Experience>("New to trading");
   const [markets, setMarkets] = useState<Market[]>([]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const timeout = window.setTimeout(() => setSplashReady(true), MIN_SPLASH_DURATION_MS);
+    return () => window.clearTimeout(timeout);
+  }, []);
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
@@ -263,8 +272,58 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider value={contextValue}>
-      {status === "workspace" ? children : status === "loading" ? (
-        <main className="auth-loading" aria-label="Loading Zuri"><span className="auth-mark">z</span><span>Getting your desk ready…</span></main>
+      {status === "workspace" && splashReady ? children : !splashReady || status === "loading" ? (
+        <main className="auth-loading" aria-label="Loading Zuri">
+          <svg className="loading-chart" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+            <defs>
+              <pattern id="loading-chart-grid" width="120" height="90" patternUnits="userSpaceOnUse">
+                <path d="M 120 0 H 0 V 90" fill="none" stroke="#bda7df" strokeOpacity=".09" strokeWidth="1" />
+              </pattern>
+              <linearGradient id="loading-chart-fill" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor="#b995ff" stopOpacity=".12" />
+                <stop offset="100%" stopColor="#b995ff" stopOpacity="0" />
+              </linearGradient>
+              <filter id="loading-chart-glow" x="-30%" y="-30%" width="160%" height="160%">
+                <feGaussianBlur stdDeviation="8" />
+              </filter>
+            </defs>
+            <rect className="loading-chart-grid" width="1440" height="900" fill="url(#loading-chart-grid)" />
+            <g className="loading-candles" fill="none" strokeWidth="2">
+              <path d="M110 470v160m90-175v170m90-180v160m90-170v170m90-180v180m90-185v175m90-180v190m90-195v180m90-185v175m90-180v180m90-190v170m90-180v175m90-185v180m90-185v175m90-180v170" />
+            </g>
+            <g className="loading-candle-bodies">
+              <rect x="100" y="490" width="20" height="60" rx="2" />
+              <rect x="190" y="500" width="20" height="70" rx="2" />
+              <rect x="280" y="450" width="20" height="90" rx="2" />
+              <rect x="370" y="430" width="20" height="65" rx="2" />
+              <rect x="460" y="390" width="20" height="100" rx="2" />
+              <rect x="550" y="410" width="20" height="75" rx="2" />
+              <rect x="640" y="350" width="20" height="90" rx="2" />
+              <rect x="730" y="365" width="20" height="85" rx="2" />
+              <rect x="820" y="310" width="20" height="110" rx="2" />
+              <rect x="910" y="320" width="20" height="80" rx="2" />
+              <rect x="1000" y="280" width="20" height="90" rx="2" />
+              <rect x="1090" y="290" width="20" height="75" rx="2" />
+              <rect x="1180" y="235" width="20" height="95" rx="2" />
+              <rect x="1270" y="245" width="20" height="75" rx="2" />
+              <rect x="1360" y="210" width="20" height="85" rx="2" />
+            </g>
+            <path className="loading-chart-area" d="M0 665 L110 610 L200 630 L290 540 L380 565 L470 475 L560 520 L650 430 L740 465 L830 370 L920 405 L1010 325 L1100 355 L1190 270 L1280 300 L1370 220 L1440 245 V900 H0 Z" />
+            <path className="loading-chart-glow" d="M0 665 L110 610 L200 630 L290 540 L380 565 L470 475 L560 520 L650 430 L740 465 L830 370 L920 405 L1010 325 L1100 355 L1190 270 L1280 300 L1370 220 L1440 245" />
+            <path className="loading-chart-line" pathLength="1" d="M0 665 L110 610 L200 630 L290 540 L380 565 L470 475 L560 520 L650 430 L740 465 L830 370 L920 405 L1010 325 L1100 355 L1190 270 L1280 300 L1370 220 L1440 245" />
+            <circle className="loading-chart-point" r="6">
+              <animateMotion dur="8s" repeatCount="indefinite" path="M0 665 L110 610 L200 630 L290 540 L380 565 L470 475 L560 520 L650 430 L740 465 L830 370 L920 405 L1010 325 L1100 355 L1190 270 L1280 300 L1370 220 L1440 245" />
+            </circle>
+          </svg>
+          <div className="loading-content" role="status" aria-live="polite">
+            <div className="loading-wordmark" aria-label="Zuri">
+              <span><i>Z</i><i>U</i></span>
+              <span><i>R</i><i>I</i></span>
+            </div>
+            <span className="loading-kicker">YOUR MARKET, IN FOCUS</span>
+            <span className="loading-progress" aria-hidden="true"><i /></span>
+          </div>
+        </main>
       ) : (
         <main className="auth-shell">
           <header className="auth-topbar">
