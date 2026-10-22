@@ -41,7 +41,7 @@ allowed_frontend_origins = os.getenv(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in allowed_frontend_origins if origin.strip()],
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -53,6 +53,7 @@ ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 ALPACA_DATA_URL = "https://data.alpaca.markets"
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 MAX_RISK_PERCENTAGE_CAP = 3.0
 
@@ -103,6 +104,40 @@ def require_authenticated_user(authorization: str | None = Header(default=None))
         logger.error("Supabase token verification returned an invalid user response.")
         raise HTTPException(status_code=502, detail="The authentication service returned an invalid response.")
     return user
+
+
+@app.delete("/api/user/account")
+def delete_user_account(user: dict = Depends(require_authenticated_user)):
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Account deletion is not configured on the backend.",
+        )
+
+    try:
+        response = requests.delete(
+            f"{SUPABASE_URL}/auth/v1/admin/users/{user['id']}",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            },
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        logger.error("Supabase account deletion request failed: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to delete your account right now. Please try again.",
+        ) from e
+
+    if response.status_code not in (200, 204):
+        logger.error("Supabase account deletion returned HTTP %s.", response.status_code)
+        raise HTTPException(
+            status_code=502,
+            detail="The authentication service could not delete your account.",
+        )
+
+    return {"deleted": True}
 
 
 class UserPrompt(BaseModel):

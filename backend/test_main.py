@@ -27,6 +27,14 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["detail"], "Sign in to use this endpoint.")
 
+    def test_account_deletion_rejects_unauthenticated_requests(self):
+        self.app.dependency_overrides.pop(self.require_authenticated_user, None)
+
+        response = self.client.delete("/api/user/account")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["detail"], "Sign in to use this endpoint.")
+
     @patch("backend.main.requests.get")
     def test_bearer_token_is_verified_with_supabase(self, get):
         from backend.main import require_authenticated_user
@@ -46,6 +54,48 @@ class AuthenticationTests(unittest.TestCase):
             },
             timeout=5,
         )
+
+    @patch("backend.main.requests.delete")
+    def test_account_deletion_only_targets_the_authenticated_user(self, delete):
+        delete.return_value = SimpleNamespace(status_code=200)
+        with patch("backend.main.SUPABASE_URL", "https://example.supabase.co"), patch(
+            "backend.main.SUPABASE_SERVICE_ROLE_KEY", "server-only-key"
+        ):
+            response = self.client.delete("/api/user/account", headers={"Authorization": "Bearer user-token"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"deleted": True})
+        delete.assert_called_once_with(
+            "https://example.supabase.co/auth/v1/admin/users/test-user",
+            headers={
+                "apikey": "server-only-key",
+                "Authorization": "Bearer server-only-key",
+            },
+            timeout=10,
+        )
+
+    @patch("backend.main.requests.delete")
+    def test_account_deletion_requires_a_server_only_service_role_key(self, delete):
+        with patch("backend.main.SUPABASE_SERVICE_ROLE_KEY", ""):
+            response = self.client.delete("/api/user/account", headers={"Authorization": "Bearer user-token"})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("not configured", response.json()["detail"])
+        delete.assert_not_called()
+
+    def test_account_deletion_allows_frontend_cors_preflight(self):
+        response = self.client.options(
+            "/api/user/account",
+            headers={
+                "Origin": "http://127.0.0.1:3000",
+                "Access-Control-Request-Method": "DELETE",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["access-control-allow-origin"], "http://127.0.0.1:3000")
+        self.assertIn("DELETE", response.headers["access-control-allow-methods"])
 
 
 class GroqConfigTests(unittest.TestCase):

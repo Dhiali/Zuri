@@ -22,21 +22,23 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 ## Sign-in and first-time setup
 
-Zuri uses Supabase Auth for email/password accounts. The public welcome screen leads into sign-up or sign-in; new accounts complete a short onboarding flow before entering the workspace. Email confirmation and password reset are supported. Onboarding preferences are saved to the signed-in user's Supabase metadata.
+Zuri uses Supabase Auth for email/password accounts. First-time visitors see a short product introduction before sign-up or sign-in. Completing or skipping it is remembered in this browser; signing out does not show it again. Deleting an account from **Settings → Security** resets the introduction for the next visit. New accounts also complete a short preferences onboarding before entering the workspace. Email confirmation and password reset are supported. Onboarding preferences are saved to the signed-in user's Supabase metadata.
 
 To connect authentication:
 
 1. Create a Supabase project and enable the **Email** and **Google** sign-in providers under **Authentication → Sign In / Providers**. Email/password remains available as a fallback.
 2. Configure **Google** in the Google Cloud Console: create an OAuth client with application type **Web application**, add your Zuri origins (`http://localhost:3000` and `http://127.0.0.1:3000`) as authorized JavaScript origins, and add the Supabase callback URL shown in Supabase's Google provider settings as an authorized redirect URI. Copy the Google client ID and secret into the Supabase Google provider fields. Set up Google's consent-screen branding as Zuri Markets; Google may require app verification before general-public use.
-3. In **Authentication → URL Configuration**, set the local Site URL to `http://localhost:3000` and add both `http://localhost:3000` and `http://127.0.0.1:3000` to the redirect URL allow list.
+3. In **Authentication → URL Configuration**, set the local Site URL to `http://localhost:3000` and add `http://localhost:3000/email-verified` and `http://127.0.0.1:3000/email-verified` to the redirect URL allow list for signup confirmations. Also allow `http://localhost:3000` and `http://127.0.0.1:3000` for sign-in, OAuth, and password reset.
 4. Copy the project's URL and its publishable (or legacy anon) key from the Supabase project settings. Copy the publishable/anon key only; never put a `service_role` or secret key in the frontend.
 5. Copy `frontend/.env.example` to `frontend/.env.local` and fill in `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
-6. Copy `backend/.env.example` to `backend/.env` and fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY` with the same project values. Keep any existing private integration keys in this file.
-7. Restart both development servers, then try **Continue with Google** from the welcome or sign-in screen. New social accounts continue to Zuri's onboarding. Email/password signup still uses email confirmation.
+6. Copy `backend/.env.example` to `backend/.env` and fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY` with the same project values. To enable account deletion, also set `SUPABASE_SERVICE_ROLE_KEY` to the project's server-side service role key. Keep this key only in the backend environment; never put it in frontend code or `frontend/.env.local`. Keep any existing private integration keys in this file.
+7. Restart the frontend, then try **Continue with Google** from the welcome or sign-in screen. New social accounts continue to Zuri's preferences onboarding. Email/password signup still uses email confirmation; after verification, the link opens a confirmation page that tells the user to return to their original Zuri tab.
 
 Google sign-in authenticates the Zuri account only. It does not connect a brokerage account or grant Zuri access to trading data.
 
 The backend verifies Supabase access tokens for account, position, order, trade-execution, and AI-chat endpoints. Market news remains public. The browser-side workspace gate is for navigation; backend token verification is the security boundary. The current workspace still contains simulated account and quote data, and account onboarding does not connect a brokerage account.
+
+Account deletion is performed by the backend using the authenticated user's verified Supabase ID and the server-only `SUPABASE_SERVICE_ROLE_KEY`. It permanently removes that Supabase Auth user; the local journal and watchlist in the current browser are also cleared. Configure the backend service-role key before using **Settings → Security → Delete account**.
 
 ### Brand account emails as Zuri
 
@@ -51,6 +53,8 @@ The sender name and sender address are controlled by the SMTP provider, not by t
 7. Test signup and password reset with an inbox you control. Verify the sender display name/address, subject, layout, button wording, and that both links return to Zuri and complete the correct flow.
 
 Editing the template changes the visible copy and link label, but it cannot change the sender identity on its own. A custom SMTP server and a verified sending domain are required for the message to come from Zuri. Supabase's delivery and branding options can vary by project; see its [custom SMTP](https://supabase.com/docs/guides/auth/auth-smtp) and [email templates](https://supabase.com/docs/guides/auth/auth-email-templates) guides.
+
+For Gmail or Google Workspace SMTP, use `smtp.gmail.com`, port `465` with SSL or `587` with TLS, the full sender email as the username, and a Google app password (not the regular account password). Confirm custom SMTP is enabled in Supabase and use the same sender address configured with the SMTP provider. See Google's [SMTP setup guide](https://knowledge.workspace.google.com/admin/gmail/send-email-from-a-printer-scanner-or-app).
 
 ## Zuri AI assistant
 

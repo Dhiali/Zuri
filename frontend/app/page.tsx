@@ -998,7 +998,12 @@ function HistoryView() {
   );
 }
 function SettingsView() {
+  const { deleteAccount } = useZuriAuth();
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("Account");
+  const [accountDeleteOpen, setAccountDeleteOpen] = useState(false);
+  const [accountDeleteConfirmation, setAccountDeleteConfirmation] = useState("");
+  const [accountDeleteBusy, setAccountDeleteBusy] = useState(false);
+  const [accountDeleteError, setAccountDeleteError] = useState("");
   const tabs: SettingsTab[] = ["Account", "Broker", "Trading", "Risk", "Platform", "Display", "Notifications", "Security"];
 
   const accountSummary = [
@@ -1144,6 +1149,33 @@ function SettingsView() {
           <div className="setting-row"><div><b>Session timeout</b><small>Inactivity lock period</small></div><select defaultValue="30 min"><option>10 min</option><option>30 min</option><option>1 hour</option><option>4 hours</option></select></div>
           <div className="setting-row"><div><b>Hide account values</b><small>Mask sensitive numbers</small></div><input type="checkbox" /></div>
           <div className="setting-row"><div><b>Export permissions</b><small>Allow CSV and PDF reports</small></div><input type="checkbox" defaultChecked /></div>
+        </div>
+        <div className="settings-section account-danger-zone">
+          <span className="small-label">DANGER ZONE</span>
+          <h3>Delete your Zuri account</h3>
+          <p>This permanently deletes your Zuri sign-in account and clears this browser’s Zuri journal and watchlist. You will be signed out and shown the introduction again.</p>
+          {!accountDeleteOpen ? (
+            <button className="danger-button" type="button" onClick={() => { setAccountDeleteOpen(true); setAccountDeleteError(""); }}>Delete account</button>
+          ) : (
+            <div className="account-delete-confirm">
+              <label htmlFor="account-delete-confirmation">Type DELETE to confirm</label>
+              <input id="account-delete-confirmation" value={accountDeleteConfirmation} onChange={(event) => setAccountDeleteConfirmation(event.target.value)} autoComplete="off" />
+              {accountDeleteError && <div className="auth-error" role="alert">{accountDeleteError}</div>}
+              <div className="account-delete-actions">
+                <button className="auth-secondary" type="button" disabled={accountDeleteBusy} onClick={() => { setAccountDeleteOpen(false); setAccountDeleteConfirmation(""); setAccountDeleteError(""); }}>Cancel</button>
+                <button className="danger-button" type="button" disabled={accountDeleteBusy || accountDeleteConfirmation !== "DELETE"} onClick={async () => {
+                  setAccountDeleteBusy(true);
+                  setAccountDeleteError("");
+                  try {
+                    await deleteAccount();
+                  } catch (deleteError) {
+                    setAccountDeleteError(deleteError instanceof Error ? deleteError.message : "Unable to delete your account. Please try again.");
+                    setAccountDeleteBusy(false);
+                  }
+                }}>{accountDeleteBusy ? "Deleting…" : "Permanently delete account"}</button>
+              </div>
+            </div>
+          )}
         </div>
       </>
     ),
