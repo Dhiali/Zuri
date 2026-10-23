@@ -397,10 +397,20 @@ td b { font-weight: 580; }
 .setting-row > div { display: flex; flex-direction: column; gap: 4px; }
 .setting-row b { color: #d1d8d5; font-size: 10px; font-weight: 520; }
 .setting-row small { color: #818b89; font-size: 9px; }
-.setting-row select, .setting-row input[type="text"], .setting-row input[type="number"] { min-width: 174px; min-height: 32px; padding: 0 9px; border: 1px solid #333a3b; border-radius: 4px; background: #202426; color: #d2d8d6; font-size: 10px; }
+.setting-row select, .setting-row input[type="text"], .setting-row input[type="email"], .setting-row input[type="number"] { min-width: 174px; min-height: 32px; padding: 0 9px; border: 1px solid #333a3b; border-radius: 4px; background: #202426; color: #d2d8d6; font-size: 10px; }
+.account-detail-value { max-width: min(60%, 420px); overflow: hidden; padding: 6px 0; border: 0; background: transparent; color: #e0e5e3; cursor: pointer; font-size: 10px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.account-detail-static { color: #a7afad; font-size: 10px; }
+.account-detail-value:hover:not(:disabled) { color: #c5a8ff; }
+.account-detail-value:disabled { cursor: default; }
+.account-edit-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 12px; }
+.account-edit-actions .auth-secondary { width: auto; min-height: 34px; margin: 0; padding: 0 12px; }
+.account-edit-button { min-height: 32px; display: inline-flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid #343a3b; border-radius: 4px; background: transparent; color: #c5ccca; cursor: pointer; font-size: 10px; }
+.account-edit-button:hover:not(:disabled) { border-color: #625477; background: #222628; color: #dcc9ff; }
+.account-edit-button:disabled { cursor: not-allowed; opacity: .55; }
+.account-edit-button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.4; }
 .setting-row input[type="checkbox"] { width: 15px; height: 15px; accent-color: #ae90ec; }
 .danger-button { min-height: 30px; padding: 0 12px; border: 1px solid rgba(232, 124, 116, 0.35); border-radius: 4px; background: rgba(232, 124, 116, 0.12); color: #ffb5af; cursor: pointer; font-size: 9px; }
-.settings-footer { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.settings-footer { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 14px; }
 .settings-footer-card { display: flex; flex-direction: column; gap: 6px; padding: 11px 12px; border: 1px solid #2d3336; border-radius: 8px; background: #15191b; }
 .settings-footer-card span { color: #7f8b8a; font-size: 8px; text-transform: uppercase; }
 .settings-footer-card strong { color: #edf1ef; font-size: 12px; }

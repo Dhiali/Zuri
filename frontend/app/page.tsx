@@ -119,6 +119,8 @@ export default function Home() {
 
 function TradingWorkspace() {
   const { session, signOut } = useZuriAuth();
+  const [deskDate, setDeskDate] = useState("");
+  const [deskTime, setDeskTime] = useState("");
   const [accountError, setAccountError] = useState("");
   const [dataError, setDataError] = useState("");
   const [section, setSection] = useState<Section>("Charts");
@@ -154,6 +156,28 @@ function TradingWorkspace() {
   const aiBrief = `The simulated ${symbol.symbol} quote is ${symbol.change} today. Treat this as a watch cue, then verify price action and risk before placing a paper order.`;
   const searchUniverse = query.trim() ? instruments : watchlistInstruments;
   const filteredInstruments = searchUniverse.filter((item) => `${item.symbol} ${item.name}`.toLowerCase().includes(query.toLowerCase()));
+
+  useEffect(() => {
+    const updateDeskDate = () => {
+      const now = new Date();
+      setDeskDate(new Intl.DateTimeFormat("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "2-digit",
+      }).format(now).toUpperCase());
+      setDeskTime(new Intl.DateTimeFormat("en-ZA", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+        timeZoneName: "short",
+      }).format(now));
+    };
+
+    updateDeskDate();
+    const timer = window.setInterval(updateDeskDate, 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!session?.user.id) return;
@@ -300,7 +324,7 @@ function TradingWorkspace() {
           <div className="nav-bottom"><button onClick={() => setSection("Settings")} className={section === "Settings" ? "nav-item selected" : "nav-item"} title="Settings"><Icon name="Settings"/><span>Settings</span></button><div className="nav-help">?</div></div>
         </nav>
         <div className="content-column">
-          <div className="page-heading"><div><div className="eyebrow">PERSONAL TRADING DESK <span>•</span> FRI, OCT 02</div><h1>{section === "Charts" ? "Charts" : section}</h1></div></div>
+          <div className="page-heading"><div><div className="eyebrow">PERSONAL TRADING DESK <span>•</span> {deskDate} <span>•</span> <time>{deskTime}</time></div><h1>{section === "Charts" ? "Charts" : section}</h1></div></div>
           {dataError && <div className="auth-error" role="alert">{dataError}</div>}
           {workspaceDataUserId !== session?.user.id ? (
             <div className="content-card"><p>{dataError ? "Your saved workspace data could not be loaded. Please try again after checking the database setup." : "Loading your saved workspace…"}</p></div>
@@ -1044,14 +1068,15 @@ function SettingsView({
   preferences: UserPreferences | null;
   onSavePreferences: (preferences: UserPreferences) => Promise<void>;
 }) {
-  const { deleteAccount } = useZuriAuth();
+  const { deleteAccount, updateDisplayName, updateEmail } = useZuriAuth();
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("Account");
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileName, setProfileName] = useState("");
-  const [profileExperience, setProfileExperience] = useState("New to trading");
-  const [profileMarkets, setProfileMarkets] = useState<string[]>([]);
+  const [accountEditing, setAccountEditing] = useState(false);
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [accountEditError, setAccountEditError] = useState("");
+  const [accountEditMessage, setAccountEditMessage] = useState("");
   const [profileError, setProfileError] = useState("");
-  const [profileSaving, setProfileSaving] = useState(false);
   const [preferencesDraft, setPreferencesDraft] = useState<UserPreferences | null>(preferences);
   const [preferencesError, setPreferencesError] = useState("");
   const [preferencesSaving, setPreferencesSaving] = useState(false);
@@ -1067,8 +1092,6 @@ function SettingsView({
       if (cancelled) return;
       setProfile(loadedProfile);
       setProfileName(loadedProfile.display_name ?? "");
-      setProfileExperience(loadedProfile.trading_experience ?? "New to trading");
-      setProfileMarkets(loadedProfile.primary_markets);
       setProfileError("");
     }).catch((loadError: unknown) => {
       if (!cancelled) setProfileError(loadError instanceof Error ? loadError.message : "Unable to load your profile.");
@@ -1082,33 +1105,54 @@ function SettingsView({
     setPreferencesDraft((current) => current ? { ...current, [key]: value } : current);
   };
 
-  const handleSaveProfile = async () => {
-    if (profileMarkets.length === 0) {
-      setProfileError("Choose at least one market to personalize your workspace.");
+  const handleSaveAccountDetails = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const nextEmail = String(formData.get("email") ?? "").trim();
+    const nextName = String(formData.get("displayName") ?? "").trim();
+    if (!profile) {
+      setAccountEditError("Your profile is still loading. Please try again.");
       return;
     }
-    setProfileSaving(true);
-    setProfileError("");
-    try {
-      const updatedProfile: UserProfile = {
-        id: userId,
-        display_name: profileName.trim() || null,
-        trading_experience: profileExperience,
-        primary_markets: profileMarkets,
-      };
-      await saveUserProfile(updatedProfile);
-      setProfile(updatedProfile);
-    } catch (saveError) {
-      setProfileError(saveError instanceof Error ? saveError.message : "Unable to save your profile.");
-    } finally {
-      setProfileSaving(false);
-    }
-  };
 
-  const toggleProfileMarket = (market: string) => {
-    setProfileMarkets((current) => current.includes(market)
-      ? current.filter((item) => item !== market)
-      : [...current, market]);
+    const emailChanged = nextEmail.toLowerCase() !== email.trim().toLowerCase();
+    const nameChanged = nextName !== (profile.display_name ?? "");
+    if (!emailChanged && !nameChanged) {
+      setAccountEditMessage("There are no changes to save.");
+      return;
+    }
+
+    setAccountSaving(true);
+    setAccountEditError("");
+    setAccountEditMessage("");
+    try {
+      if (nameChanged) {
+        const updatedProfile = { ...profile, display_name: nextName || null };
+        await saveUserProfile(updatedProfile);
+        try {
+          await updateDisplayName(nextName);
+        } catch (metadataError) {
+          throw new Error(`Your name was saved to your Zuri profile, but could not be updated for sign-in: ${metadataError instanceof Error ? metadataError.message : "Please try again."}`);
+        }
+        setProfile(updatedProfile);
+        setProfileName(nextName);
+      }
+      if (emailChanged) {
+        try {
+          await updateEmail(nextEmail);
+        } catch (updateError) {
+          throw new Error(`${nameChanged ? "Your name was saved. " : ""}${updateError instanceof Error ? updateError.message : "Unable to update your email. Please try again."}`);
+        }
+        setAccountEditMessage("Check your inbox to confirm the email change. Your current sign-in email stays active until confirmation.");
+      } else {
+        setAccountEditMessage("Your account details have been updated.");
+      }
+      setAccountEditing(false);
+    } catch (updateError) {
+      setAccountEditError(updateError instanceof Error ? updateError.message : "Unable to update your account details. Please try again.");
+    } finally {
+      setAccountSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -1154,14 +1198,36 @@ function SettingsView({
         </div>
         {profileError && <div className="auth-error" role="alert">{profileError}</div>}
         <div className="settings-section">
-          <div className="setting-row"><div><b>Email</b><small>Your sign-in address</small></div><strong>{email}</strong></div>
-          <div className="setting-row"><label htmlFor="profile-name"><b>Display name</b><small>Name shown in Zuri</small></label><input id="profile-name" value={profileName} maxLength={60} disabled={!profile} onChange={(event) => setProfileName(event.target.value)} /></div>
-          <div className="setting-row"><label htmlFor="profile-experience"><b>Trading journey</b><small>Your selected experience level</small></label><select id="profile-experience" value={profileExperience} disabled={!profile} onChange={(event) => setProfileExperience(event.target.value)}><option>New to trading</option><option>Learning the basics</option><option>Experienced</option></select></div>
-          <div className="settings-section">
-            <span className="small-label">MARKETS OF INTEREST</span>
-            <div className="auth-choice-grid markets">{["Stocks", "Crypto", "Forex", "Commodities"].map((market) => <button key={market} type="button" disabled={!profile} aria-pressed={profileMarkets.includes(market)} className={profileMarkets.includes(market) ? "auth-choice selected" : "auth-choice"} onClick={() => toggleProfileMarket(market)}>{market}</button>)}</div>
-          </div>
-          {profile && <button className="solid-button" type="button" disabled={profileSaving} onClick={() => void handleSaveProfile()}>{profileSaving ? "Saving profile…" : "Save profile"}</button>}
+          <form key={email} onSubmit={handleSaveAccountDetails}>
+            <div className="setting-row">
+              <div><b>Email</b><small>Your sign-in address</small></div>
+              {accountEditing
+                ? <input id="account-email" name="email" type="email" defaultValue={email} required autoComplete="email" aria-label="Email address" />
+                : <button className="account-detail-value" type="button" disabled={!profile} onClick={() => { setAccountEditing(true); setAccountEditError(""); setAccountEditMessage(""); }}>{email}</button>}
+            </div>
+            <div className="setting-row">
+              <div><b>Name</b><small>Name shown in Zuri</small></div>
+              {accountEditing
+                ? <input id="profile-name" name="displayName" defaultValue={profileName} maxLength={60} autoComplete="name" aria-label="Display name" />
+                : <button className="account-detail-value" type="button" disabled={!profile} onClick={() => { setAccountEditing(true); setAccountEditError(""); setAccountEditMessage(""); }}>{profile?.display_name || "Add your name"}</button>}
+            </div>
+            {accountEditError && <div className="auth-error" role="alert">{accountEditError}</div>}
+            {accountEditMessage && <div className="auth-message" role="status">{accountEditMessage}</div>}
+            <div className="account-edit-actions">
+              {accountEditing ? (
+                <>
+                  <button className="auth-secondary" type="button" disabled={accountSaving} onClick={() => { setAccountEditing(false); setAccountEditError(""); setAccountEditMessage(""); }}>Cancel</button>
+                  <button className="solid-button" type="submit" disabled={accountSaving || !profile}>{accountSaving ? "Saving…" : "Save changes"}</button>
+                </>
+              ) : (
+                <button className="account-edit-button" type="button" disabled={!profile} aria-label="Edit account details" title="Edit account details" onClick={() => { setAccountEditing(true); setAccountEditError(""); setAccountEditMessage(""); }}>
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.7 2.3a1.4 1.4 0 0 1 2 2L6 12l-3 1 1-3 7.7-7.7Z" /><path d="M9.8 4.2 11.8 6.2" /></svg>
+                  <span>Edit details</span>
+                </button>
+              )}
+            </div>
+          </form>
+          <div className="setting-row"><div><b>Trading journey</b><small>Your experience level</small></div><span className="account-detail-static">{profile?.trading_experience ?? "—"}</span></div>
         </div>
         <div className="settings-section">
           <span className="small-label">SIMULATED ACCOUNT</span>
@@ -1308,6 +1374,21 @@ function SettingsView({
       {!preferencesDraft && <div className="auth-message" role="status">Loading your saved preferences…</div>}
       {preferencesSaving && <div className="auth-message" role="status">Saving your preferences…</div>}
 
+      <div className="settings-footer">
+        <div className="settings-footer-card">
+          <span className="small-label">BROKER STATUS</span>
+          <strong>{brokerSummary[2].value}</strong>
+        </div>
+        <div className="settings-footer-card">
+          <span className="small-label">ENVIRONMENT</span>
+          <strong>{brokerSummary[6].value}</strong>
+        </div>
+        <div className="settings-footer-card">
+          <span className="small-label">ACCOUNT</span>
+          <strong>{email}</strong>
+        </div>
+      </div>
+
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
           {tabs.map((tab) => (
@@ -1324,21 +1405,6 @@ function SettingsView({
 
         <div className="content-card settings-card">
           {tabContent[settingsTab]}
-        </div>
-      </div>
-
-      <div className="settings-footer">
-        <div className="settings-footer-card">
-          <span className="small-label">BROKER STATUS</span>
-          <strong>{brokerSummary[2].value}</strong>
-        </div>
-        <div className="settings-footer-card">
-          <span className="small-label">ENVIRONMENT</span>
-          <strong>{brokerSummary[6].value}</strong>
-        </div>
-        <div className="settings-footer-card">
-          <span className="small-label">ACCOUNT</span>
-          <strong>{email}</strong>
         </div>
       </div>
     </div>

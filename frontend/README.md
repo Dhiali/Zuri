@@ -24,6 +24,8 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 Zuri uses Supabase Auth for email/password accounts. First-time visitors see a short product introduction before sign-up or sign-in. Completing or skipping it is remembered in this browser; signing out does not show it again. Deleting an account from **Settings → Security** resets the introduction for the next visit. New accounts also complete a short preferences onboarding before entering the workspace. Email confirmation and password reset are supported. Onboarding completion is saved to Auth metadata; profile details and preferences are saved in Supabase PostgreSQL.
 
+Signed-in users can update their display name and request an email change from **Settings → Account**. Account details are read-only until **Edit details** is selected. Display names are saved to the user's profile and Auth metadata. Email changes follow Supabase's configured confirmation flow; the existing sign-in email remains active until the change is confirmed. Trading experience is displayed as read-only account information.
+
 ## Database foundation
 
 Supabase Auth and Supabase PostgreSQL are the source of truth for Zuri accounts and user-owned data. The migrations in `supabase/migrations/` create:
@@ -77,7 +79,7 @@ For Gmail or Google Workspace SMTP, use `smtp.gmail.com`, port `465` with SSL or
 
 The floating Zuri assistant sends chat requests to the FastAPI backend at `http://127.0.0.1:8000` by default. Set `NEXT_PUBLIC_BACKEND_URL` in the frontend environment when the backend runs at a different URL. Add the frontend origin to the backend's comma-separated `FRONTEND_ORIGINS` setting if it is not `http://localhost:3000` or `http://127.0.0.1:3000`.
 
-The assistant provides educational trading support and does not submit orders. The workspace's displayed market quotes and account figures are demo data.
+The assistant provides educational trading support and does not submit orders. It uses each user's saved onboarding market interests to prioritize relevant terminology and context, without treating interests as proof of expertise or a substitute for accuracy. These interests guide each conversation; they do not train or change the underlying AI model. The workspace's displayed market quotes and account figures are demo data.
 
 ## Market briefing
 

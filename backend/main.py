@@ -106,6 +106,46 @@ def require_authenticated_user(authorization: str | None = Header(default=None))
     return user
 
 
+def get_user_primary_markets(user_id: str, authorization: str):
+    try:
+        response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/profiles",
+            params={"select": "primary_markets", "id": f"eq.{user_id}"},
+            headers={
+                "apikey": SUPABASE_ANON_KEY,
+                "Authorization": authorization,
+            },
+            timeout=5,
+        )
+    except requests.RequestException as e:
+        logger.error("Loading assistant market interests failed: %s", e)
+        raise HTTPException(status_code=503, detail="Unable to load your assistant preferences. Please try again.") from e
+
+    if response.status_code in (401, 403):
+        raise HTTPException(status_code=401, detail="Your session is invalid or expired. Please sign in again.")
+    if response.status_code != 200:
+        logger.error("Loading assistant market interests returned HTTP %s.", response.status_code)
+        raise HTTPException(status_code=503, detail="Unable to load your assistant preferences. Please try again.")
+
+    try:
+        profiles = response.json()
+    except ValueError as e:
+        logger.error("Loading assistant market interests returned invalid JSON.")
+        raise HTTPException(status_code=502, detail="The profile service returned an invalid response.") from e
+    if not isinstance(profiles, list):
+        logger.error("Loading assistant market interests returned an invalid profile list.")
+        raise HTTPException(status_code=502, detail="The profile service returned an invalid response.")
+    if not profiles:
+        return []
+
+    markets = profiles[0].get("primary_markets") if isinstance(profiles[0], dict) else None
+    allowed_markets = {"Stocks", "Crypto", "Forex", "Commodities"}
+    if not isinstance(markets, list) or any(market not in allowed_markets for market in markets):
+        logger.error("Loading assistant market interests returned invalid profile data.")
+        raise HTTPException(status_code=502, detail="The profile service returned invalid assistant preferences.")
+    return markets
+
+
 @app.delete("/api/user/account")
 def delete_user_account(user: dict = Depends(require_authenticated_user)):
     if not SUPABASE_SERVICE_ROLE_KEY:
@@ -392,11 +432,18 @@ def get_market_news(symbols: str = Query(default="", max_length=200)):
     }
 
 
-@app.post("/api/assistant/chat", dependencies=[Depends(require_authenticated_user)])
-def chat_with_assistant(request: AssistantChatRequest):
+@app.post("/api/assistant/chat")
+def chat_with_assistant(
+    request: AssistantChatRequest,
+    user: dict = Depends(require_authenticated_user),
+    authorization: str | None = Header(default=None),
+):
     if request.messages[-1].role != "user":
         raise HTTPException(status_code=400, detail="The final message must be from the user.")
 
+    if authorization is None:
+        raise HTTPException(status_code=401, detail="Sign in to use this endpoint.")
+    primary_markets = get_user_primary_markets(user["id"], authorization)
     system_prompt = (
         "You are Zuri, a supportive trading companion. Help users understand trading "
         "concepts, think through a plan, and identify risk questions. Be clear, concise, "
@@ -409,6 +456,15 @@ def chat_with_assistant(request: AssistantChatRequest):
         f"section={request.context.section}, symbol={request.context.symbol}, "
         f"timeframe={request.context.timeframe}."
     )
+    if primary_markets:
+        interests = ", ".join(primary_markets)
+        system_prompt += (
+            f" The user's saved market interests are: {interests}. Personalize explanations "
+            "around these areas, prioritize relevant terminology and market-specific context, "
+            "and adapt depth to the user's question. Treat these as areas of interest, not "
+            "proof of expertise. Be accurate about uncertainty and acknowledge knowledge limits; "
+            "do not claim exhaustive expertise or promise predictions."
+        )
     if request.context.news_article:
         article = request.context.news_article
         hostname = (urlparse(article.url).hostname or "").lower()

@@ -118,8 +118,33 @@ class AssistantChatTests(unittest.TestCase):
 
         self.app.dependency_overrides.pop(require_authenticated_user, None)
 
+    @patch("backend.main.requests.get")
+    def test_assistant_interests_are_loaded_for_the_authenticated_user(self, get):
+        from backend.main import get_user_primary_markets
+
+        get.return_value = SimpleNamespace(
+            status_code=200,
+            json=lambda: [{"primary_markets": ["Crypto", "Stocks"]}],
+        )
+        with patch("backend.main.SUPABASE_URL", "https://example.supabase.co"), patch(
+            "backend.main.SUPABASE_ANON_KEY", "public-anon-key"
+        ):
+            markets = get_user_primary_markets("user-123", "Bearer user-token")
+
+        self.assertEqual(markets, ["Crypto", "Stocks"])
+        get.assert_called_once_with(
+            "https://example.supabase.co/rest/v1/profiles",
+            params={"select": "primary_markets", "id": "eq.user-123"},
+            headers={
+                "apikey": "public-anon-key",
+                "Authorization": "Bearer user-token",
+            },
+            timeout=5,
+        )
+
     @patch("backend.main.get_groq_client")
-    def test_chat_returns_ai_reply_with_workspace_context(self, get_client):
+    @patch("backend.main.get_user_primary_markets", return_value=["Crypto"])
+    def test_chat_returns_ai_reply_with_workspace_context_and_market_interests(self, get_markets, get_client):
         completion = SimpleNamespace(
             choices=[
                 SimpleNamespace(
@@ -131,6 +156,7 @@ class AssistantChatTests(unittest.TestCase):
 
         response = self.client.post(
             "/api/assistant/chat",
+            headers={"Authorization": "Bearer test-token"},
             json={
                 "messages": [{"role": "user", "content": "Help me review my plan."}],
                 "context": {
@@ -146,6 +172,8 @@ class AssistantChatTests(unittest.TestCase):
         call = get_client.return_value.chat.completions.create.call_args
         self.assertIn("symbol=BTCUSD", call.kwargs["messages"][0]["content"])
         self.assertIn("cannot execute trades", call.kwargs["messages"][0]["content"])
+        self.assertIn("saved market interests are: Crypto", call.kwargs["messages"][0]["content"])
+        get_markets.assert_called_once_with("test-user", "Bearer test-token")
 
     @patch("backend.main.get_groq_client")
     def test_chat_includes_selected_news_as_untrusted_source_context(self, get_client):
@@ -170,7 +198,8 @@ class AssistantChatTests(unittest.TestCase):
             },
         })
 
-        result = chat_with_assistant(request)
+        with patch("backend.main.get_user_primary_markets", return_value=[]):
+            result = chat_with_assistant(request, {"id": "test-user"}, "Bearer test-token")
 
         self.assertEqual(result["reply"], "The excerpt reports a rate decision.")
         prompt = get_client.return_value.chat.completions.create.call_args.kwargs["messages"][0]["content"]
@@ -193,6 +222,32 @@ class AssistantChatTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+    @patch("backend.main.get_groq_client")
+    @patch("backend.main.get_user_primary_markets", return_value=["Crypto", "Stocks"])
+    def test_chat_personalizes_to_saved_markets_without_claiming_expertise(self, get_markets, get_client):
+        get_client.return_value.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="Here is a balanced overview."))]
+        )
+        response = self.client.post(
+            "/api/assistant/chat",
+            headers={"Authorization": "Bearer test-token"},
+            json={
+                "messages": [{"role": "user", "content": "Explain this market move."}],
+                "context": {
+                    "section": "Charts",
+                    "symbol": "BTCUSD",
+                    "timeframe": "15m",
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        prompt = get_client.return_value.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("saved market interests are: Crypto, Stocks", prompt)
+        self.assertIn("not proof of expertise", prompt)
+        self.assertIn("do not claim exhaustive expertise", prompt)
+        get_markets.assert_called_once_with("test-user", "Bearer test-token")
 
 
 class MarketNewsTests(unittest.TestCase):

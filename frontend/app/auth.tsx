@@ -46,6 +46,8 @@ const introSteps = [
 type AuthContextValue = {
   session: Session | null;
   signOut: () => Promise<void>;
+  updateEmail: (email: string) => Promise<void>;
+  updateDisplayName: (displayName: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
 };
 
@@ -173,6 +175,20 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
       if (signOutError) throw signOutError;
       setSession(null);
       setStatus(signedOutStatus());
+    },
+    updateEmail: async (email: string) => {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase || !session) throw new Error("Sign in before changing your email.");
+      const { error: updateError } = await supabase.auth.updateUser({ email });
+      if (updateError) throw updateError;
+    },
+    updateDisplayName: async (displayName: string) => {
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase || !session) throw new Error("Sign in before changing your name.");
+      const { error: updateError } = await supabase.auth.updateUser({
+        data: { display_name: displayName },
+      });
+      if (updateError) throw updateError;
     },
     deleteAccount: async () => {
       const supabase = getSupabaseBrowserClient();
