@@ -22,6 +22,8 @@ from pydantic import BaseModel, Field
 from groq import Groq
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import brokers
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(ROOT_DIR / "backend" / ".env")
@@ -47,25 +49,11 @@ app.add_middleware(
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY")) if os.getenv("GROQ_API_KEY") else None
 
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
-ALPACA_DATA_URL = "https://data.alpaca.markets"
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_URL =  os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 MAX_RISK_PERCENTAGE_CAP = 3.0
-
-
-def get_alpaca_headers():
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        raise HTTPException(status_code=400, detail="Alpaca API keys missing in .env")
-    return {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
-        "Content-Type": "application/json"
-    }
 
 
 def get_groq_client():
@@ -106,11 +94,11 @@ def require_authenticated_user(authorization: str | None = Header(default=None))
     return user
 
 
-def get_user_primary_markets(user_id: str, authorization: str):
+def get_user_profile_traits(user_id: str, authorization: str):
     try:
         response = requests.get(
             f"{SUPABASE_URL}/rest/v1/profiles",
-            params={"select": "primary_markets", "id": f"eq.{user_id}"},
+            params={"select": "primary_markets,trading_experience", "id": f"eq.{user_id}"},
             headers={
                 "apikey": SUPABASE_ANON_KEY,
                 "Authorization": authorization,
@@ -136,14 +124,21 @@ def get_user_primary_markets(user_id: str, authorization: str):
         logger.error("Loading assistant market interests returned an invalid profile list.")
         raise HTTPException(status_code=502, detail="The profile service returned an invalid response.")
     if not profiles:
-        return []
+        return [], None
 
+    experience = profiles[0].get("trading_experience") if isinstance(profiles[0], dict) else None
+    if experience not in {None, "New to trading", "Learning the basics", "Experienced"}:
+        experience = None
     markets = profiles[0].get("primary_markets") if isinstance(profiles[0], dict) else None
     allowed_markets = {"Stocks", "Crypto", "Forex", "Commodities"}
     if not isinstance(markets, list) or any(market not in allowed_markets for market in markets):
         logger.error("Loading assistant market interests returned invalid profile data.")
         raise HTTPException(status_code=502, detail="The profile service returned invalid assistant preferences.")
-    return markets
+    return markets, experience
+
+
+def get_user_primary_markets(user_id: str, authorization: str):
+    return get_user_profile_traits(user_id, authorization)[0]
 
 
 @app.delete("/api/user/account")
@@ -183,6 +178,8 @@ def delete_user_account(user: dict = Depends(require_authenticated_user)):
 class UserPrompt(BaseModel):
     prompt: str
     execute: bool = False
+    broker: str | None = None
+    confirmation_phrase: str | None = None
 
 
 class AssistantMessage(BaseModel):
@@ -382,18 +379,16 @@ class AssistantChatRequest(BaseModel):
     context: AssistantContext
 
 
-@app.get("/api/account", dependencies=[Depends(require_authenticated_user)])
-def get_account_summary():
-    headers = get_alpaca_headers()
-    res = requests.get(f"{ALPACA_BASE_URL}/v2/account", headers=headers)
-    if res.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Alpaca Error: {res.text}")
-    data = res.json()
+@app.get("/api/account")
+def get_account_summary(broker: str | None = Query(default=None), user: dict = Depends(require_authenticated_user)):
+    """Account and positions for the user's linked broker (the first linked one by default)."""
+    row, adapter = _active_connection(user["id"], broker)
     return {
-        "equity": float(data["equity"]),
-        "buying_power": float(data["buying_power"]),
-        "cash": float(data["cash"]),
-        "currency": data["currency"]
+        "broker": row["broker"],
+        "broker_name": brokers.BROKERS[row["broker"]]["name"],
+        "environment": row["environment"],
+        "account": adapter.account(),
+        "positions": adapter.positions(),
     }
 
 
@@ -432,6 +427,43 @@ def get_market_news(symbols: str = Query(default="", max_length=200)):
     }
 
 
+EXPERIENCE_STYLE = {
+    "New to trading": (
+        " The user is new to trading: use plain language, define jargon briefly, explain the why "
+        "behind risk concepts, and keep answers short and encouraging."
+    ),
+    "Learning the basics": (
+        " The user is learning the basics: use standard trading terms with brief reminders, and "
+        "connect ideas to practical examples."
+    ),
+    "Experienced": (
+        " The user is experienced: be concise and technical, skip beginner explanations, and focus "
+        "on trade-offs, risk and edge cases."
+    ),
+}
+
+
+def _linked_account_context(user_id: str) -> str:
+    """Read-only snapshot of the user's linked broker for the assistant; empty when unavailable."""
+    try:
+        row, adapter = _active_connection(user_id)
+        account = adapter.account()
+        positions = adapter.positions()
+    except Exception as e:
+        logger.info("Assistant account context unavailable: %s", e)
+        return ""
+    held = ", ".join(
+        f"{p['symbol']} {p.get('side') or ''} x{p.get('quantity')}".strip() for p in positions[:10]
+    ) or "none"
+    return (
+        f" The user has linked a {brokers.BROKERS[row['broker']]['name']} {row['environment']} account. "
+        f"Read-only snapshot: equity={account.get('equity')} {account.get('currency')}, "
+        f"cash={account.get('cash')}, buying_power={account.get('buying_power')}, "
+        f"open positions: {held}. You may reference these figures when discussing their risk "
+        "and position sizing, but you still cannot place, change, or close orders."
+    )
+
+
 @app.post("/api/assistant/chat")
 def chat_with_assistant(
     request: AssistantChatRequest,
@@ -443,15 +475,14 @@ def chat_with_assistant(
 
     if authorization is None:
         raise HTTPException(status_code=401, detail="Sign in to use this endpoint.")
-    primary_markets = get_user_primary_markets(user["id"], authorization)
+    primary_markets, experience = get_user_profile_traits(user["id"], authorization)
     system_prompt = (
         "You are Zuri, a supportive trading companion. Help users understand trading "
         "concepts, think through a plan, and identify risk questions. Be clear, concise, "
         "and educational; do not give personalized financial advice or claim certainty. "
         "Never claim to have placed, changed, or closed an order. You cannot execute trades. "
-        "The user's Zuri workspace currently uses simulated market quotes and demo account "
-        "values, so do not describe its market data as live or use it as factual evidence. "
-        "If asked for a trade decision, help them evaluate their own plan and risks instead "
+        "The user's Zuri workspace market quotes and charts are simulated, so do not describe them as live or use them as factual evidence;         any linked broker account snapshot below is real. "
+                "If asked for a trade decision, help them evaluate their own plan and risks instead "
         "of telling them what to buy or sell. Current workspace context: "
         f"section={request.context.section}, symbol={request.context.symbol}, "
         f"timeframe={request.context.timeframe}."
@@ -465,6 +496,8 @@ def chat_with_assistant(
             "proof of expertise. Be accurate about uncertainty and acknowledge knowledge limits; "
             "do not claim exhaustive expertise or promise predictions."
         )
+    system_prompt += EXPERIENCE_STYLE.get(experience or "", "")
+    system_prompt += _linked_account_context(user["id"])
     if request.context.news_article:
         article = request.context.news_article
         hostname = (urlparse(article.url).hostname or "").lower()
@@ -519,66 +552,40 @@ def chat_with_assistant(
     return {"reply": reply.strip()}
 
 
-@app.get("/api/positions", dependencies=[Depends(require_authenticated_user)])
-def get_open_positions():
-    headers = get_alpaca_headers()
-    res = requests.get(f"{ALPACA_BASE_URL}/v2/positions", headers=headers)
-    if res.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Alpaca Error: {res.text}")
-
-    positions = []
-    for pos in res.json():
-        positions.append({
-            "symbol": pos["symbol"],
-            "qty": int(pos["qty"]),
-            "side": pos["side"],
-            "avg_entry_price": float(pos["avg_entry_price"]),
-            "current_price": float(pos["current_price"]),
-            "market_value": float(pos["market_value"]),
-            "unrealized_pl": float(pos["unrealized_pl"]),
-            "unrealized_plpc": round(float(pos["unrealized_plpc"]) * 100, 2)
-        })
-    return {"positions": positions}
+@app.get("/api/positions")
+def get_open_positions(broker: str | None = Query(default=None), user: dict = Depends(require_authenticated_user)):
+    _, adapter = _active_connection(user["id"], broker)
+    return {"positions": adapter.positions()}
 
 
-@app.get("/api/orders", dependencies=[Depends(require_authenticated_user)])
-def get_open_orders():
-    headers = get_alpaca_headers()
-    res = requests.get(f"{ALPACA_BASE_URL}/v2/orders?status=open", headers=headers)
-    if res.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Alpaca Error: {res.text}")
-
-    orders = []
-    for o in res.json():
-        orders.append({
-            "id": o["id"],
-            "symbol": o["symbol"],
-            "qty": int(o["qty"]),
-            "side": o["side"],
-            "type": o["type"],
-            "status": o["status"]
-        })
-    return {"orders": orders}
+@app.get("/api/orders")
+def get_open_orders(broker: str | None = Query(default=None), user: dict = Depends(require_authenticated_user)):
+    _, adapter = _active_connection(user["id"], broker)
+    if not hasattr(adapter, "open_orders"):
+        raise HTTPException(status_code=501, detail="Listing open orders is not supported for this broker yet.")
+    return {"orders": adapter.open_orders()}
 
 
-@app.delete("/api/close-all", dependencies=[Depends(require_authenticated_user)])
-def close_all_positions():
-    headers = get_alpaca_headers()
-    cancel_res = requests.delete(f"{ALPACA_BASE_URL}/v2/orders", headers=headers)
-    close_res = requests.delete(f"{ALPACA_BASE_URL}/v2/positions?cancel_orders=true", headers=headers)
-
-    if close_res.status_code not in (200, 207):
-        raise HTTPException(status_code=500, detail=f"Liquidation Error: {close_res.text}")
-
+@app.delete("/api/close-all")
+def close_all_positions(
+    broker: str | None = Query(default=None),
+    confirmation_phrase: str | None = Query(default=None),
+    user: dict = Depends(require_authenticated_user),
+):
+    row, adapter = _active_connection(user["id"], broker)
+    if not hasattr(adapter, "close_all"):
+        raise HTTPException(status_code=501, detail="Closing all positions is not supported for this broker yet.")
+    if row["environment"] == "live" and confirmation_phrase != LIVE_CONFIRMATION_PHRASE:
+        raise HTTPException(status_code=400, detail=f'Closing live positions requires typing "{LIVE_CONFIRMATION_PHRASE}".')
+    adapter.close_all()
     return {
         "status": "PANIC_SUCCESS",
         "message": "All pending orders cancelled and open positions liquidated.",
-        "alpaca_response": close_res.json() if close_res.text else "Closed"
     }
 
 
-@app.post("/api/parse-trade", dependencies=[Depends(require_authenticated_user)])
-def parse_and_execute_trade(request: UserPrompt):
+@app.post("/api/parse-trade")
+def parse_and_execute_trade(request: UserPrompt, user: dict = Depends(require_authenticated_user)):
     system_prompt = """
     You are Zuri's execution engine parser. Extract trade details from the user prompt into raw JSON:
     {
@@ -631,14 +638,13 @@ def parse_and_execute_trade(request: UserPrompt):
             "message": "Set 'execute': true to place order."
         }
 
-    headers = get_alpaca_headers()
-    acc_res = requests.get(f"{ALPACA_BASE_URL}/v2/account", headers=headers)
-    equity = float(acc_res.json()["equity"])
-
-    trade_res = requests.get(f"{ALPACA_DATA_URL}/v2/stocks/{ticker}/trades/latest", headers=headers)
-    if trade_res.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Could not fetch price for ticker '{ticker}'")
-    current_price = float(trade_res.json()["trade"]["p"])
+    row, adapter = _active_connection(user["id"], request.broker)
+    if row["environment"] == "live" and request.confirmation_phrase != LIVE_CONFIRMATION_PHRASE:
+        raise HTTPException(status_code=400, detail=f'Live orders require typing "{LIVE_CONFIRMATION_PHRASE}".')
+    equity = adapter.account().get("equity")
+    if not equity:
+        raise HTTPException(status_code=502, detail="Could not read your account equity.")
+    current_price = adapter.price(ticker)
 
     if action == "BUY":
         if not (stop_loss < current_price < take_profit):
@@ -652,6 +658,8 @@ def parse_and_execute_trade(request: UserPrompt):
                 status_code=400,
                 detail=f"Invalid SHORT targets: Take profit (${take_profit}) must be below current price (${current_price}), and stop loss (${stop_loss}) must be above."
             )
+    else:
+        raise HTTPException(status_code=400, detail="The trade must be a BUY or SELL.")
 
     risk_amount = equity * (effective_risk / 100.0)
     stop_distance = abs(current_price - stop_loss)
@@ -659,30 +667,158 @@ def parse_and_execute_trade(request: UserPrompt):
     if shares < 1:
         shares = 1
 
-    order_payload = {
-        "symbol": ticker,
-        "qty": shares,
-        "side": action.lower(),
-        "type": "market",
-        "time_in_force": "gtc",
-        "order_class": "bracket",
-        "take_profit": {"limit_price": take_profit},
-        "stop_loss": {"stop_price": stop_loss}
-    }
-
-    order_res = requests.post(f"{ALPACA_BASE_URL}/v2/orders", headers=headers, json=order_payload)
-    if order_res.status_code not in (200, 201):
-        raise HTTPException(status_code=500, detail=f"Alpaca Order Error: {order_res.text}")
-
-    order_data = order_res.json()
+    order = adapter.place_order(ticker, action.lower(), shares, stop_loss, take_profit)
     return {
         "status": "executed",
+        "environment": row["environment"],
         "parsed_trade": parsed,
         "execution_details": {
             "calculated_shares": shares,
-            "market_price_usd": current_price,
-            "risk_amount_usd": round(risk_amount, 2),
-            "alpaca_order_id": order_data.get("id")
+            "market_price": current_price,
+            "risk_amount": round(risk_amount, 2),
+            "order_id": order.get("order_id")
         },
         "circuit_breaker_warning": risk_capped_warning
     }
+
+
+def _service_headers():
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise HTTPException(status_code=503, detail="Broker linking requires SUPABASE_SERVICE_ROLE_KEY on the backend.")
+    return {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+
+
+def _connections_request(method: str, params: dict, **kwargs):
+    try:
+        response = requests.request(
+            method,
+            f"{SUPABASE_URL}/rest/v1/broker_connections",
+            params=params,
+            headers={**_service_headers(), "Prefer": "return=representation"},
+            timeout=5,
+            **kwargs,
+        )
+    except requests.RequestException as e:
+        logger.error("Broker connection storage request failed: %s", e)
+        raise HTTPException(status_code=503, detail="Unable to reach broker connection storage.") from e
+    if response.status_code >= 400:
+        logger.error("Broker connection storage returned HTTP %s.", response.status_code)
+        raise HTTPException(status_code=503, detail="Broker connection storage failed. Apply the latest Supabase migration.")
+    return response.json() if response.content else []
+
+
+def _load_connection(user_id: str, broker: str):
+    if broker not in brokers.BROKERS:
+        raise HTTPException(status_code=404, detail="Unsupported broker.")
+    rows = _connections_request("GET", {"select": "*", "user_id": f"eq.{user_id}", "broker": f"eq.{broker}"})
+    if not rows:
+        raise HTTPException(status_code=404, detail="This broker is not linked.")
+    row = rows[0]
+    adapter = brokers.get_adapter(broker, brokers.decrypt_credentials(row["credentials_encrypted"]), row["environment"])
+    return row, adapter
+
+
+def _active_connection(user_id: str, broker: str | None = None):
+    if broker:
+        return _load_connection(user_id, broker)
+    rows = _connections_request("GET", {"select": "broker", "user_id": f"eq.{user_id}", "order": "created_at.asc", "limit": "1"})
+    if not rows:
+        raise HTTPException(status_code=404, detail="Link a broker in Settings → Broker first.")
+    return _load_connection(user_id, rows[0]["broker"])
+
+
+class BrokerLinkRequest(BaseModel):
+    broker: str
+    environment: Literal["paper", "live"] = "paper"
+    credentials: dict[str, str]
+
+
+class BrokerOrderRequest(BaseModel):
+    symbol: str = Field(pattern=r"^[A-Za-z0-9_./-]{1,20}$")
+    side: Literal["buy", "sell"]
+    quantity: float = Field(gt=0, le=100000)
+    confirmed: bool = False
+    confirmation_phrase: str | None = None
+
+
+LIVE_CONFIRMATION_PHRASE = "CONFIRM LIVE"
+
+
+@app.get("/api/brokers")
+def list_brokers(user: dict = Depends(require_authenticated_user)):
+    rows = _connections_request("GET", {"select": "broker,environment,account_label,created_at", "user_id": f"eq.{user['id']}"})
+    linked = {row["broker"]: row for row in rows}
+    return {
+        "brokers": [
+            {
+                "id": broker_id,
+                "name": info["name"],
+                "fields": info["fields"],
+                "environments": info["environments"],
+                "asset_class": info["asset_class"],
+                "linked": linked.get(broker_id),
+            }
+            for broker_id, info in brokers.BROKERS.items()
+        ],
+        "live_confirmation_phrase": LIVE_CONFIRMATION_PHRASE,
+    }
+
+
+@app.post("/api/brokers/link")
+def link_broker(request: BrokerLinkRequest, user: dict = Depends(require_authenticated_user)):
+    info = brokers.BROKERS.get(request.broker)
+    if info is None:
+        raise HTTPException(status_code=404, detail="Unsupported broker.")
+    credentials = {field: request.credentials.get(field, "").strip() for field in info["fields"]}
+    if any(not value or len(value) > 512 for value in credentials.values()):
+        raise HTTPException(status_code=422, detail="All credential fields are required.")
+
+    adapter = brokers.get_adapter(request.broker, credentials, request.environment)
+    account = adapter.account()  # Validates the credentials before anything is stored.
+
+    encrypted = brokers.encrypt_credentials(credentials)
+    row = {
+        "user_id": user["id"],
+        "broker": request.broker,
+        "environment": request.environment,
+        "account_label": account.get("label"),
+        "credentials_encrypted": encrypted,
+    }
+    existing =  _connections_request("GET", {"select": "id", "user_id": f"eq.{user['id']}", "broker": f"eq.{request.broker}"})
+    if existing:
+        _connections_request("PATCH", {"id": f"eq.{existing[0]['id']}"}, json={k: v for k, v in row.items() if k != "user_id"})
+    else:
+        _connections_request("POST", {}, json=row)
+    return {"broker": request.broker, "environment": request.environment, "account": account}
+
+
+@app.delete("/api/brokers/{broker}")
+def unlink_broker(broker: str, user: dict = Depends(require_authenticated_user)):
+    if broker not in brokers.BROKERS:
+        raise HTTPException(status_code=404, detail="Unsupported broker.")
+    _connections_request("DELETE", {"user_id": f"eq.{user['id']}", "broker": f"eq.{broker}"})
+    return {"status": "unlinked"}
+
+
+@app.get("/api/brokers/{broker}/account")
+def get_broker_account(broker: str, user: dict = Depends(require_authenticated_user)):
+    row, adapter = _load_connection(user["id"], broker)
+    return {"environment": row["environment"], "account": adapter.account(), "positions": adapter.positions()}
+
+
+@app.post("/api/brokers/{broker}/orders")
+def place_broker_order(broker: str, request: BrokerOrderRequest, user: dict = Depends(require_authenticated_user)):
+    row, adapter = _load_connection(user["id"], broker)
+    if not request.confirmed:
+        raise HTTPException(status_code=400, detail="Orders must be explicitly confirmed.")
+    if row["environment"] == "live" and request.confirmation_phrase != LIVE_CONFIRMATION_PHRASE:
+        raise HTTPException(status_code=400, detail=f'Live orders require typing "{LIVE_CONFIRMATION_PHRASE}".')
+    result = adapter.place_order(request.symbol.upper(), request.side, request.quantity)
+    logger.info("User %s placed %s %s order on %s (%s).", user["id"], request.side, request.symbol, broker, row["environment"])
+    return {"environment": row["environment"], **result}
+
+

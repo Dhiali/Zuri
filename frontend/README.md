@@ -89,6 +89,18 @@ Use **Ask Zuri** on a story to include its title, excerpt, source, time, and lin
 
 Publisher RSS reuse, attribution, and commercial-use terms have not been cleared for production. Review each publisher's current terms and obtain any required permissions before deploying this feed commercially. The current three-feed set is an initial briefing, not comprehensive real-time financial news.
 
+## Linking live broker accounts
+
+Settings → Broker lets each user link their own **Alpaca**, **OANDA** or **Tradier** account (paper/practice or live) using API credentials created in the broker's dashboard.
+
+1. Apply `supabase/migrations/20261023000004_broker_connections.sql` in the Supabase SQL editor.
+2. Set `BROKER_ENCRYPTION_KEY` (see `backend/.env.example`) and `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env`, and `pip install cryptography` in the backend environment.
+3. Credentials are validated against the broker, encrypted (Fernet) and stored per user in a table that browsers cannot read. They are never sent back to the frontend.
+4. Orders need an explicit confirmation checkbox; live orders additionally require typing `CONFIRM LIVE`.
+5. The dashboard, Trade ticket, positions, status bar and Zuri assistant all use your linked broker account (the first one linked, via `GET /api/account`). The assistant gets a read-only snapshot of equity, cash and positions; it still cannot place orders. Quotes, charts and History remain simulated demo data. The global `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` env vars are no longer used.
+
+OAuth (Alpaca Connect, Tradier, Coinbase), Interactive Brokers and Binance/Coinbase are not implemented yet: OAuth needs Zuri to be registered as an app with each broker, and IBKR needs its Client Portal gateway.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

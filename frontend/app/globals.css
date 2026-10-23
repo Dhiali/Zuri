@@ -328,6 +328,7 @@ td b { font-weight: 580; }
 .status-pill.canceled { background: #343433; color: #aeb3ae; }
 .trade-intro { min-height: 93px; display: flex; align-items: center; justify-content: space-between; }
 .trade-intro h2 { margin: 5px 0; font-size: 21px; font-weight: 560; }
+.paper-tag.live-tag { border-color: #7a3a3a; color: #ff7b7b; background: #2b1a1a; }
 .paper-tag { padding: 5px 7px; border: 1px solid #395d4d; border-radius: 3px; color: var(--green); background: #1a2b24; font-size: 8px; letter-spacing: .7px; }
 .trade-account-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 0 14px; }
 .trade-account-card { padding: 11px 12px; border: 1px solid #2a2f31; border-radius: 8px; background: linear-gradient(180deg, #171b1d, #141819); }
@@ -404,6 +405,11 @@ td b { font-weight: 580; }
 .account-detail-value:disabled { cursor: default; }
 .account-edit-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 12px; }
 .account-edit-actions .auth-secondary { width: auto; min-height: 34px; margin: 0; padding: 0 12px; }
+.broker-card { flex-wrap: wrap; padding: 10px 0; }
+.broker-card small { display: block; }
+.broker-card .account-edit-actions { padding-top: 0; }
+.broker-form { flex-basis: 100%; display: grid; gap: 10px; padding: 10px 0; }
+.broker-form label { display: grid; gap: 4px; font-size: 12px; }
 .account-edit-button { min-height: 32px; display: inline-flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid #343a3b; border-radius: 4px; background: transparent; color: #c5ccca; cursor: pointer; font-size: 10px; }
 .account-edit-button:hover:not(:disabled) { border-color: #625477; background: #222628; color: #dcc9ff; }
 .account-edit-button:disabled { cursor: not-allowed; opacity: .55; }

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useZuriAuth, ZuriAuthGate } from "./auth";
+import { BrokerConnections } from "./broker-connections";
+import { backendUrl, formatMoney, useLinkedAccount, type LinkedAccountState, type LinkedPosition } from "./linked-account";
 import {
   addJournalEntry,
   deleteJournalEntry,
@@ -119,6 +121,7 @@ export default function Home() {
 
 function TradingWorkspace() {
   const { session, signOut } = useZuriAuth();
+  const linkedAccount = useLinkedAccount(session?.access_token ?? "");
   const [deskDate, setDeskDate] = useState("");
   const [deskTime, setDeskTime] = useState("");
   const [accountError, setAccountError] = useState("");
@@ -134,7 +137,6 @@ function TradingWorkspace() {
   const [timeframe, setTimeframe] = useState("15m");
   const [activeTool, setActiveTool] = useState("");
   const [orderSide, setOrderSide] = useState<"Buy" | "Sell">("Buy");
-  const [orderPlaced, setOrderPlaced] = useState(false);
   const [query, setQuery] = useState("");
   const [aiExpanded, setAiExpanded] = useState(false);
   const [aiOnChart, setAiOnChart] = useState(false);
@@ -315,7 +317,7 @@ function TradingWorkspace() {
       <header className="topbar">
         <a className="brand" href="#charts" onClick={() => setSection("Charts")}><span className="brand-mark">z</span><span>zuri<span className="brand-dot">.</span></span></a>
         <div className="top-divider" />
-        <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">PAPER · DEMO</span></div>
+        <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">{linkedAccount.data ? `${linkedAccount.data.broker_name.toUpperCase()} · ${linkedAccount.data.environment === "live" ? "LIVE" : "PAPER"}` : "NO BROKER LINKED"}</span></div>
         <div className="topbar-right"><button className="icon-action" title="Search markets" onClick={() => document.getElementById("market-search")?.focus()}>⌕</button><button className="icon-action notification" title="Notifications">♧<i /></button><span className="topbar-email">{session?.user.email}</span><button className="signout-button" onClick={async () => { try { await signOut(); } catch (signOutError) { setAccountError(signOutError instanceof Error ? signOutError.message : "Unable to sign out."); } }}>Sign out</button>{accountError && <span className="topbar-auth-error" role="alert">{accountError}</span>}</div>
       </header>
       <div className={section === "Settings" ? "workspace settings-workspace" : "workspace"}>
@@ -358,12 +360,13 @@ function TradingWorkspace() {
                 setMarketNewsRefresh((value) => value + 1);
               }}
               onAskAboutStory={askZuriAboutNews}
+              linked={linkedAccount}
             />
           )}
-          {section === "Trade" && <TradeView symbol={symbol} orderSide={orderSide} setOrderSide={setOrderSide} orderPlaced={orderPlaced} setOrderPlaced={setOrderPlaced}/>}
+          {section === "Trade" && <TradeView symbol={symbol} orderSide={orderSide} setOrderSide={setOrderSide} linked={linkedAccount} token={session?.access_token ?? ""}/>}
           {section === "History" && <HistoryView/>}
           {section === "Journal" && <JournalView entries={journalEntries} onNewEntry={() => { setSection("Charts"); setJournalDraftSide("Watching"); setJournalDraftOpen(true); }} onDelete={(id) => void removeJournalEntry(id)} />}
-          {section === "Settings" && session && <SettingsView userId={session.user.id} email={session.user.email ?? ""} preferences={userPreferences} onSavePreferences={async (preferences) => {
+          {section === "Settings" && session && <SettingsView linked={linkedAccount} userId={session.user.id} email={session.user.email ?? ""} preferences={userPreferences} onSavePreferences={async (preferences) => {
             await saveUserPreferences(preferences);
             setUserPreferences(preferences);
             setTimeframe(preferences.default_timeframe);
@@ -443,7 +446,7 @@ function TradingWorkspace() {
           </>}
         </aside>}
       </div>
-      <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>Paper trading <b>ON</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
+      <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>{linkedAccount.data ? (linkedAccount.data.environment === "live" ? "Live trading" : "Paper trading") : "Trading"} <b>{linkedAccount.data ? "ON" : "OFF"}</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
       <AuraAssistant
         section={section}
         symbol={symbol}
@@ -756,7 +759,9 @@ function Dashboard({
   error,
   onRefresh,
   onAskAboutStory,
+  linked,
 }: {
+  linked: LinkedAccountState;
   setSection: (section: Section) => void;
   news: MarketNewsResponse | null;
   loading: boolean;
@@ -771,65 +776,90 @@ function Dashboard({
         <button className="solid-button" onClick={() => setSection("Trade")}>＋ <span>New order</span></button>
       </div>
       <MarketNewsSection variant="dashboard" news={news} loading={loading} error={error} onRefresh={onRefresh} onAskAboutStory={onAskAboutStory} />
-      <div className="stat-grid">
-        <Metric label="Net liquidation" value="$24,680.42" change="+$1,284.20 (5.49%)"/>
-        <Metric label="Today's P&L" value="+$284.60" change="+1.17% today"/>
-        <Metric label="Win rate" value="64.8%" change="Last 30 days"/>
-        <Metric label="Open positions" value="3" change="$8,420 deployed"/>
-      </div>
-      <div className="dashboard-columns">
-        <section className="content-card performance-card">
-          <div className="section-title"><div><span className="small-label">PORTFOLIO PERFORMANCE</span><h2>Account growth</h2></div><select aria-label="Performance period"><option>30 days</option><option>90 days</option><option>1 year</option></select></div>
-          <div className="performance-total">$24,680 <span>+5.49%</span></div>
-          <div className="performance-chart">
-            <svg viewBox="0 0 700 190" preserveAspectRatio="none" aria-label="Portfolio growth line">
-              <defs><linearGradient id="performance-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#38c49a" stopOpacity=".22"/><stop offset="1" stopColor="#38c49a" stopOpacity="0"/></linearGradient></defs>
-              <path d="M0 156 C45 151 54 132 92 140 S145 112 179 127 S236 90 265 106 S315 72 347 87 S395 69 425 78 S467 42 510 55 S551 38 582 48 S635 19 700 24 L700 190 L0 190Z" fill="url(#performance-fill)"/>
-              <path d="M0 156 C45 151 54 132 92 140 S145 112 179 127 S236 90 265 106 S315 72 347 87 S395 69 425 78 S467 42 510 55 S551 38 582 48 S635 19 700 24" fill="none" stroke="#39c99e" strokeWidth="2.5"/>
-            </svg>
-          </div>
-          <div className="performance-dates"><span>SEP 03</span><span>SEP 10</span><span>SEP 17</span><span>SEP 24</span><span>OCT 02</span></div>
+      {linked.status !== "ready" ? (
+        <section className="content-card">
+          <div className="section-title"><div><span className="small-label">BROKER ACCOUNT</span><h2>{linked.status === "loading" ? "Loading your account…" : linked.status === "none" ? "No broker linked yet" : "Account unavailable"}</h2></div></div>
+          <p className="muted">{linked.status === "none" ? "Link a live or paper broker account to see your real balances and positions here." : linked.error}</p>
+          <button className="outline-button" onClick={() => setSection("Settings")}>Open Settings → Broker →</button>
         </section>
-        <section className="content-card advice-card">
-          <div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI · ACCOUNT COACH</span></div>
-          <h2>Protect your gains on high-volatility days.</h2>
-          <p>Your average position size is 28% larger than last month. On days your exposure exceeds $7,500, your drawdown has historically doubled.</p>
-          <div className="advice-stat"><span>Current exposure</span><b>$8,420 <i>Above your $7,500 threshold</i></b></div>
-          <button className="outline-button">Review open positions →</button>
-          <small>Based on your last 90 days · Not financial advice</small>
-        </section>
-      </div>
-      <section className="content-card positions-card">
-        <div className="section-title"><div><span className="small-label">ACCOUNT</span><h2>Open positions</h2></div><button className="text-action" onClick={() => setSection("Trade")}>Trade →</button></div>
-        <PositionsTable/>
-      </section>
+      ) : linked.data && (() => {
+        const { account, positions, broker_name: brokerName, environment } = linked.data;
+        const floating = positions.reduce((sum, position) => sum + (position.unrealized_pl ?? 0), 0);
+        return (
+          <>
+            <div className="stat-grid">
+              <Metric label={`Net liquidation · ${brokerName} ${environment === "live" ? "LIVE" : "paper"}`} value={formatMoney(account.equity, account.currency)} change={account.label ?? ""}/>
+              <Metric label="Cash" value={formatMoney(account.cash, account.currency)} change="Available balance"/>
+              <Metric label="Buying power" value={formatMoney(account.buying_power, account.currency)} change="Reported by broker"/>
+              <Metric label="Open positions" value={String(positions.length)} change={`${floating >= 0 ? "+" : "-"}${formatMoney(Math.abs(floating), account.currency)} floating`}/>
+            </div>
+            <section className="content-card positions-card">
+              <div className="section-title"><div><span className="small-label">ACCOUNT</span><h2>Open positions</h2></div><button className="text-action" onClick={() => setSection("Trade")}>Trade →</button></div>
+              <PositionsTable positions={positions} currency={account.currency} />
+            </section>
+          </>
+        );
+      })()}
     </div>
   );
 }
 function Metric({ label, value, change }: { label: string; value: string; change: string }) { return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small className={change.startsWith("+") ? "positive" : "muted"}>{change}</small></div>; }
-function TradeView({ symbol, orderSide, setOrderSide, orderPlaced, setOrderPlaced }: { symbol: Instrument; orderSide: "Buy" | "Sell"; setOrderSide: (side: "Buy" | "Sell") => void; orderPlaced: boolean; setOrderPlaced: (placed: boolean) => void }) {
+function TradeView({ symbol, orderSide, setOrderSide, linked, token }: { symbol: Instrument; orderSide: "Buy" | "Sell"; setOrderSide: (side: "Buy" | "Sell") => void; linked: LinkedAccountState; token: string }) {
   const [tradeSymbol, setTradeSymbol] = useState(symbol);
-  const [quantity, setQuantity] = useState("0.025");
+  const [orderSymbol, setOrderSymbol] = useState(symbol.symbol);
+  const [quantity, setQuantity] = useState("1");
   const [limitPrice, setLimitPrice] = useState(symbol.price.replace(/,/g, ""));
-  const accountCurrency = "USD";
-  const balance = 24680.42;
-  const equity = 24782.18;
-  const freeMargin = 17362.18;
-  const buyingPower = 24680.42;
+  const [confirmed, setConfirmed] = useState(false);
+  const [livePhrase, setLivePhrase] = useState("");
+  const [orderBusy, setOrderBusy] = useState(false);
+  const [orderMessage, setOrderMessage] = useState("");
+  const [orderError, setOrderError] = useState("");
+  const account = linked.data?.account;
+  const isLive = linked.data?.environment === "live";
+  const accountCurrency = account?.currency ?? "USD";
+  const balance = account?.cash ?? 0;
+  const equity = account?.equity ?? 0;
+  const buyingPower = account?.buying_power ?? 0;
   const quantityValue = Number(quantity);
   const priceValue = Number(limitPrice);
   const estimatedValue = quantityValue * priceValue;
-  const validOrder = Number.isFinite(estimatedValue) && estimatedValue > 0;
+  const validOrder = Number.isFinite(quantityValue) && quantityValue > 0 && Number.isFinite(estimatedValue) && estimatedValue > 0;
   const buyingPowerAfter = Math.max(0, buyingPower - (orderSide === "Buy" && validOrder ? estimatedValue : 0));
   const quotePrecision = tradeSymbol.group === "Forex" ? 5 : 2;
   const quotePrice = Number(tradeSymbol.price.replace(/,/g, ""));
   const spread = quotePrice * (tradeSymbol.group === "Forex" ? 0.0001 : 0.00007);
-  const formatCurrency = (value: number) => `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatCurrency = (value: number) => formatMoney(value, accountCurrency);
   const formatQuote = (value: number) => value.toLocaleString("en-US", { minimumFractionDigits: quotePrecision, maximumFractionDigits: quotePrecision });
+  const exposurePct = buyingPower > 0 ? ((validOrder ? estimatedValue : 0) / buyingPower * 100).toFixed(1) : "0.0";
+
+  async function submitOrder() {
+    if (!linked.data) return;
+    setOrderBusy(true);
+    setOrderError("");
+    setOrderMessage("");
+    try {
+      const response = await fetch(`${backendUrl}/api/brokers/${linked.data.broker}/orders`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ symbol: orderSymbol.trim(), side: orderSide.toLowerCase(), quantity: quantityValue, confirmed, confirmation_phrase: livePhrase }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The order was rejected.");
+      setOrderMessage(`${isLive ? "LIVE" : "Paper"} order sent: ${body.status ?? "submitted"}.`);
+      setConfirmed(false);
+      setLivePhrase("");
+      linked.refresh();
+    } catch (error) {
+      setOrderError(error instanceof Error ? error.message : "The order failed.");
+    } finally {
+      setOrderBusy(false);
+    }
+  }
 
   return (
     <div className="secondary-view trade-view">
-      <div className="trade-intro"><div><span className="small-label">ORDER TICKET</span><h2>Place an order</h2><p>Paper trading account · {accountCurrency} account</p></div><span className="paper-tag">PAPER MODE</span></div>
+      <div className="trade-intro"><div><span className="small-label">ORDER TICKET</span><h2>Place an order</h2><p>{linked.data ? `${linked.data.broker_name} ${isLive ? "live" : "paper"} account · ${accountCurrency}` : "No broker linked"}</p></div>{linked.data && <span className={isLive ? "paper-tag live-tag" : "paper-tag"}>{isLive ? "LIVE · REAL MONEY" : "PAPER MODE"}</span>}</div>
+      {!linked.data && <p className="auth-message">{linked.status === "loading" ? "Loading your broker account…" : linked.status === "none" ? "Link a broker in Settings → Broker to place orders." : linked.error}</p>}
 
       <div className="trade-account-row">
         <div className="trade-account-card">
@@ -845,35 +875,44 @@ function TradeView({ symbol, orderSide, setOrderSide, orderPlaced, setOrderPlace
           <strong>{formatCurrency(equity)}</strong>
         </div>
         <div className="trade-account-card">
-          <span>Free margin</span>
-          <strong>{formatCurrency(freeMargin)}</strong>
+          <span>Buying power</span>
+          <strong>{formatCurrency(buyingPower)}</strong>
         </div>
       </div>
 
       <div className="trade-layout">
         <section className="content-card order-card">
           <div className="side-toggle"><button className={orderSide === "Buy" ? "buy active" : "buy"} onClick={() => setOrderSide("Buy")}>Buy / Long</button><button className={orderSide === "Sell" ? "sell active" : "sell"} onClick={() => setOrderSide("Sell")}>Sell / Short</button></div>
-          <label className="field-label">Symbol<select value={tradeSymbol.symbol} onChange={(event) => { const nextSymbol = initialInstruments.find((item) => item.symbol === event.target.value); if (nextSymbol) { setTradeSymbol(nextSymbol); setLimitPrice(nextSymbol.price.replace(/,/g, "")); } }}>{initialInstruments.map((item) => <option key={item.symbol} value={item.symbol}>{item.symbol} · {item.name}</option>)}</select></label>
-          <div className="field-row"><label className="field-label">Order type<select><option>Market</option><option>Limit</option><option>Stop</option><option>Stop limit</option></select></label><label className="field-label">Time in force<select><option>Good for day</option><option>Good till canceled</option></select></label></div>
-          <div className="field-row"><label className="field-label">Quantity<input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="decimal"/></label><label className="field-label">Limit price ({accountCurrency})<input value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal"/></label></div>
+          <label className="field-label">Symbol<input list="order-symbols" value={orderSymbol} maxLength={20} onChange={(event) => { const value = event.target.value.toUpperCase(); setOrderSymbol(value); const nextSymbol = initialInstruments.find((item) => item.symbol === value); if (nextSymbol) { setTradeSymbol(nextSymbol); setLimitPrice(nextSymbol.price.replace(/,/g, "")); } }} placeholder={linked.data?.broker === "oanda" ? "EUR_USD" : "AAPL"}/><datalist id="order-symbols">{initialInstruments.map((item) => <option key={item.symbol} value={item.symbol}>{item.name}</option>)}</datalist></label>
+          <div className="field-row"><label className="field-label">Order type<select disabled><option>Market</option></select></label></div>
+          <div className="field-row"><label className="field-label">Quantity<input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="decimal"/></label><label className="field-label">Reference price ({accountCurrency}, estimate only)<input value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal"/></label></div>
           <div className="order-estimate"><span>Estimated value</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Buying power after order</span><b>{formatCurrency(buyingPowerAfter)}</b></div>
-          <button className={orderSide === "Buy" ? "submit-order buy-submit" : "submit-order sell-submit"} disabled={!validOrder} onClick={() => setOrderPlaced(true)}>{orderPlaced ? "Order submitted ✓" : `${orderSide} ${tradeSymbol.symbol}`}</button><small className="disclaimer">Paper order only. No real funds will be used.</small>
+          {isLive && <label className="field-label">Type CONFIRM LIVE to place a real-money order<input value={livePhrase} onChange={(event) => setLivePhrase(event.target.value)} autoComplete="off"/></label>}
+          <label className="field-label"><span><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}/> I confirm this {isLive ? "LIVE" : "paper"} market order</span></label>
+          {orderError && <p className="auth-error" role="alert">{orderError}</p>}
+          {orderMessage && <p className="auth-message" role="status">{orderMessage}</p>}
+          <button className={orderSide === "Buy" ? "submit-order buy-submit" : "submit-order sell-submit"} disabled={!validOrder || !linked.data || !confirmed || orderBusy || (isLive && livePhrase !== "CONFIRM LIVE")} onClick={() => void submitOrder()}>{orderBusy ? "Sending…" : `${orderSide} ${orderSymbol || "—"}`}</button><small className="disclaimer">{isLive ? "This sends a real order to your live broker account." : "Paper order only. No real funds will be used."}</small>
         </section>
         <section className="content-card trade-context">
           <div className="section-title"><div><span className="small-label">MARKET SNAPSHOT · DEMO</span><h2>{tradeSymbol.symbol}</h2></div><span className={tradeSymbol.up ? "positive" : "negative"}>{tradeSymbol.change}</span></div>
           <strong className="snapshot-price">{tradeSymbol.group === "Forex" ? "" : "$"}{tradeSymbol.price}</strong>
           <div className="snapshot-row"><span>Bid</span><b>{formatQuote(Math.max(0, quotePrice - spread / 2))}</b><span>Ask</span><b>{formatQuote(quotePrice + spread / 2)}</b></div>
-          <div className="snapshot-row"><span>Notional</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Exposure</span><b>{((validOrder ? estimatedValue : 0) / buyingPower * 100).toFixed(1)}%</b></div>
-          <div className="trade-ai-note"><span className="ai-spark">✳</span><div><b>Zuri risk check · demo</b><p>This paper order uses {((validOrder ? estimatedValue : 0) / buyingPower * 100).toFixed(1)}% of the demo account value. Check your size and exit plan before submitting.</p></div></div>
+          <div className="snapshot-row"><span>Notional</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Exposure</span><b>{exposurePct}%</b></div>
+          <div className="trade-ai-note"><span className="ai-spark">✳</span><div><b>Zuri risk check</b><p>This order would use about {exposurePct}% of your reported buying power (using your reference price). Check your size and exit plan before submitting.</p></div></div>
         </section>
       </div>
-      <section className="content-card positions-card"><div className="section-title"><div><span className="small-label">PORTFOLIO</span><h2>Open positions</h2></div><span className="muted">3 positions</span></div><PositionsTable/></section>
+      <section className="content-card positions-card"><div className="section-title"><div><span className="small-label">PORTFOLIO</span><h2>Open positions</h2></div><span className="muted">{linked.data ? `${linked.data.positions.length} positions` : "No broker linked"}</span></div>{linked.data ? <PositionsTable positions={linked.data.positions} currency={linked.data.account.currency} /> : <p className="muted">Link a broker in Settings → Broker to see your positions.</p>}</section>
     </div>
   );
 }
-function PositionsTable() {
-  const rows = [["BTCUSD", "Long", "$84,620.00", "$85,890.00", "+$126.80", "+1.50%"], ["ETHUSD", "Long", "$2,241.20", "$2,284.60", "+$86.80", "+1.94%"], ["SOLUSD", "Short", "$145.30", "$142.82", "+$49.60", "+1.71%"]];
-  return <div className="table-scroll"><table><thead><tr><th>SYMBOL</th><th>SIDE</th><th>ENTRY</th><th>MARK</th><th>UNREALIZED P&L</th><th>RETURN</th></tr></thead><tbody>{rows.map((row) => <tr key={row[0]}><td><b>{row[0]}</b></td><td><span className={row[1] === "Long" ? "side-pill long" : "side-pill short"}>{row[1]}</span></td><td>{row[2]}</td><td>{row[3]}</td><td className="positive">{row[4]}</td><td className="positive">{row[5]}</td></tr>)}</tbody></table></div>;
+function PositionsTable({ positions, currency }: { positions: LinkedPosition[]; currency: string | null }) {
+  if (positions.length === 0) return <p className="muted">No open positions.</p>;
+  const pct = (value: number | null) => (value === null ? "—" : `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`);
+  return <div className="table-scroll"><table><thead><tr><th>SYMBOL</th><th>SIDE</th><th>QTY</th><th>ENTRY</th><th>MARK</th><th>UNREALIZED P&L</th><th>RETURN</th></tr></thead><tbody>{positions.map((position) => {
+    const isLong = (position.side ?? "long") === "long";
+    const pl = position.unrealized_pl;
+    return <tr key={position.symbol}><td><b>{position.symbol}</b></td><td><span className={isLong ? "side-pill long" : "side-pill short"}>{isLong ? "Long" : "Short"}</span></td><td>{position.quantity ?? "—"}</td><td>{formatMoney(position.avg_entry_price, currency)}</td><td>{formatMoney(position.current_price, currency)}</td><td className={pl === null ? "" : pl >= 0 ? "positive" : "negative"}>{pl === null ? "—" : `${pl >= 0 ? "+" : "-"}${formatMoney(Math.abs(pl), currency)}`}</td><td className={(position.unrealized_plpc ?? 0) >= 0 ? "positive" : "negative"}>{pct(position.unrealized_plpc)}</td></tr>;
+  })}</tbody></table></div>;
 }
 function HistoryView() {
   type HistoryTab = "positions" | "orders" | "deals";
@@ -1062,7 +1101,9 @@ function SettingsView({
   email,
   preferences,
   onSavePreferences,
+  linked,
 }: {
+  linked: LinkedAccountState;
   userId: string;
   email: string;
   preferences: UserPreferences | null;
@@ -1175,17 +1216,6 @@ function SettingsView({
     };
   }, [onSavePreferences, preferences, preferencesDraft]);
 
-  const brokerSummary = [
-    { label: "Broker", value: "Zuri Markets Execution" },
-    { label: "Server", value: "ZuriPrime-Demo" },
-    { label: "Status", value: "Connected" },
-    { label: "Type", value: "Paper / Simulated" },
-    { label: "Latency", value: "18 ms" },
-    { label: "Trade mode", value: "Demo" },
-    { label: "Execution policy", value: "Netting" },
-    { label: "Support", value: "24/7" },
-  ];
-
   const tabContent: Record<SettingsTab, React.ReactNode> = {
     Account: (
       <>
@@ -1228,6 +1258,8 @@ function SettingsView({
             </div>
           </form>
           <div className="setting-row"><div><b>Trading journey</b><small>Your experience level</small></div><span className="account-detail-static">{profile?.trading_experience ?? "—"}</span></div>
+          {profile?.trading_experience === "Experienced" && <p className="auth-message" role="note">Zuri is built for newer traders first. You can use everything here, and the assistant will keep answers concise and technical. Advanced tools are on the way.</p>}
+          {profile?.trading_experience === "Learning the basics" && <p className="auth-message" role="note">The assistant will use standard trading terms with short reminders as you learn.</p>}
         </div>
         <div className="settings-section">
           <span className="small-label">SIMULATED ACCOUNT</span>
@@ -1237,14 +1269,7 @@ function SettingsView({
     ),
     Broker: (
       <>
-        <div className="settings-section">
-          <span className="small-label">BROKER DETAILS</span>
-          <h3>Execution profile</h3>
-          <div className="setting-row"><div><b>Broker name</b><small>Connected brokerage entity</small></div><select defaultValue="Zuri Markets Execution"><option>Zuri Markets Execution</option><option>PrimeFlow Desk</option><option>DirectFX Gateway</option></select></div>
-          <div className="setting-row"><div><b>Server</b><small>Execution environment</small></div><select defaultValue="ZuriPrime-Demo"><option>ZuriPrime-Demo</option><option>ZuriPrime-Live</option><option>PrimeFlow-Alpha</option></select></div>
-          <div className="setting-row"><div><b>Login</b><small>Broker account login ID</small></div><input type="text" defaultValue="ZT-20491" /></div>
-          <div className="setting-row"><div><b>Connection mode</b><small>Gateway or direct routing</small></div><select defaultValue="Auto"><option>Auto</option><option>Direct</option><option>Proxy</option></select></div>
-        </div>
+        <BrokerConnections onChange={linked.refresh} />
         <div className="settings-section">
           <span className="small-label">BROKER TOOLS</span>
           <h3>Order routing</h3>
@@ -1377,11 +1402,11 @@ function SettingsView({
       <div className="settings-footer">
         <div className="settings-footer-card">
           <span className="small-label">BROKER STATUS</span>
-          <strong>{brokerSummary[2].value}</strong>
+          <strong>{linked.data ? `${linked.data.broker_name} connected` : linked.status === "loading" ? "Checking…" : "Not linked"}</strong>
         </div>
         <div className="settings-footer-card">
           <span className="small-label">ENVIRONMENT</span>
-          <strong>{brokerSummary[6].value}</strong>
+          <strong>{linked.data ? (linked.data.environment === "live" ? "Live (real money)" : "Paper / practice") : "—"}</strong>
         </div>
         <div className="settings-footer-card">
           <span className="small-label">ACCOUNT</span>

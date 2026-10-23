@@ -112,6 +112,9 @@ class AssistantChatTests(unittest.TestCase):
         self.app = app
         self.client = TestClient(app)
         app.dependency_overrides[require_authenticated_user] = lambda: {"id": "test-user"}
+        patcher = patch("backend.main._linked_account_context", return_value="")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         from backend.main import require_authenticated_user
@@ -134,7 +137,7 @@ class AssistantChatTests(unittest.TestCase):
         self.assertEqual(markets, ["Crypto", "Stocks"])
         get.assert_called_once_with(
             "https://example.supabase.co/rest/v1/profiles",
-            params={"select": "primary_markets", "id": "eq.user-123"},
+            params={"select": "primary_markets,trading_experience", "id": "eq.user-123"},
             headers={
                 "apikey": "public-anon-key",
                 "Authorization": "Bearer user-token",
@@ -143,7 +146,7 @@ class AssistantChatTests(unittest.TestCase):
         )
 
     @patch("backend.main.get_groq_client")
-    @patch("backend.main.get_user_primary_markets", return_value=["Crypto"])
+    @patch("backend.main.get_user_profile_traits", return_value=(["Crypto"], "New to trading"))
     def test_chat_returns_ai_reply_with_workspace_context_and_market_interests(self, get_markets, get_client):
         completion = SimpleNamespace(
             choices=[
@@ -198,7 +201,7 @@ class AssistantChatTests(unittest.TestCase):
             },
         })
 
-        with patch("backend.main.get_user_primary_markets", return_value=[]):
+        with patch("backend.main.get_user_profile_traits", return_value=([], None)):
             result = chat_with_assistant(request, {"id": "test-user"}, "Bearer test-token")
 
         self.assertEqual(result["reply"], "The excerpt reports a rate decision.")
@@ -224,7 +227,7 @@ class AssistantChatTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
     @patch("backend.main.get_groq_client")
-    @patch("backend.main.get_user_primary_markets", return_value=["Crypto", "Stocks"])
+    @patch("backend.main.get_user_profile_traits", return_value=(["Crypto", "Stocks"], "Experienced"))
     def test_chat_personalizes_to_saved_markets_without_claiming_expertise(self, get_markets, get_client):
         get_client.return_value.chat.completions.create.return_value = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="Here is a balanced overview."))]
@@ -247,6 +250,7 @@ class AssistantChatTests(unittest.TestCase):
         self.assertIn("saved market interests are: Crypto, Stocks", prompt)
         self.assertIn("not proof of expertise", prompt)
         self.assertIn("do not claim exhaustive expertise", prompt)
+        self.assertIn("The user is experienced: be concise and technical", prompt)
         get_markets.assert_called_once_with("test-user", "Bearer test-token")
 
 
@@ -348,6 +352,85 @@ class MarketNewsTests(unittest.TestCase):
 
         self.assertEqual(articles, [])
         self.assertEqual(warning, "CNBC")
+
+
+class BrokerTests(unittest.TestCase):
+    def setUp(self):
+        from backend.main import app, require_authenticated_user
+
+        self.app = app
+        self.client = TestClient(app)
+        app.dependency_overrides[require_authenticated_user] = lambda: {"id": "test-user"}
+
+    def tearDown(self):
+        from backend.main import require_authenticated_user
+
+        self.app.dependency_overrides.pop(require_authenticated_user, None)
+
+    def _row(self, environment):
+        from cryptography.fernet import Fernet
+        from backend import brokers
+
+        with patch.dict(os.environ, {"BROKER_ENCRYPTION_KEY": Fernet.generate_key().decode()}):
+            token = brokers.encrypt_credentials({"api_key": "k", "api_secret": "s"})
+            return {"environment": environment, "credentials_encrypted": token}, os.environ["BROKER_ENCRYPTION_KEY"]
+
+    def test_credentials_round_trip_encrypted(self):
+        from backend import brokers
+
+        row, key = self._row("paper")
+        self.assertNotIn("api_secret", row["credentials_encrypted"])
+        with patch.dict(os.environ, {"BROKER_ENCRYPTION_KEY": key}):
+            self.assertEqual(brokers.decrypt_credentials(row["credentials_encrypted"])["api_key"], "k")
+
+    def test_order_requires_confirmation(self):
+        adapter = SimpleNamespace(place_order=lambda *a: {"order_id": "1", "status": "accepted"})
+        with patch("backend.main._load_connection", return_value=({"environment": "paper"}, adapter)):
+            body = {"symbol": "AAPL", "side": "buy", "quantity": 1}
+            self.assertEqual(self.client.post("/api/brokers/alpaca/orders", json=body).status_code, 400)
+            self.assertEqual(self.client.post("/api/brokers/alpaca/orders", json={**body, "confirmed": True}).status_code, 200)
+
+    def test_account_uses_the_users_linked_broker(self):
+        adapter = SimpleNamespace(
+            account=lambda: {"equity": 1000.0, "currency": "USD"},
+            positions=lambda: [{"symbol": "AAPL", "quantity": 2.0}],
+        )
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "live"}, adapter)):
+            body = self.client.get("/api/account").json()
+        self.assertEqual(body["environment"], "live")
+        self.assertEqual(body["account"]["equity"], 1000.0)
+        self.assertEqual(body["positions"][0]["symbol"], "AAPL")
+
+    def test_account_requires_a_linked_broker(self):
+        from fastapi import HTTPException
+
+        with patch("backend.main._active_connection", side_effect=HTTPException(status_code=404, detail="Link a broker")):
+            self.assertEqual(self.client.get("/api/account").status_code, 404)
+
+    def test_assistant_context_includes_linked_account(self):
+        from backend.main import _linked_account_context
+
+        adapter = SimpleNamespace(
+            account=lambda: {"equity": 1000.0, "currency": "USD", "cash": 500.0, "buying_power": 900.0},
+            positions=lambda: [{"symbol": "AAPL", "side": "long", "quantity": 2.0}],
+        )
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "paper"}, adapter)):
+            context = _linked_account_context("test-user")
+        self.assertIn("equity=1000.0", context)
+        self.assertIn("AAPL long x2.0", context)
+        with patch("backend.main._active_connection", side_effect=RuntimeError("down")):
+            self.assertEqual(_linked_account_context("test-user"), "")
+
+    def test_live_order_requires_phrase(self):
+        adapter = SimpleNamespace(place_order=lambda *a: {"order_id": "1", "status": "accepted"})
+        with patch("backend.main._load_connection", return_value=({"environment": "live"}, adapter)):
+            body = {"symbol": "AAPL", "side": "buy", "quantity": 1, "confirmed": True}
+            self.assertEqual(self.client.post("/api/brokers/alpaca/orders", json=body).status_code, 400)
+            ok = self.client.post(
+                "/api/brokers/alpaca/orders", json={**body, "confirmation_phrase": "CONFIRM LIVE"}
+            )
+            self.assertEqual(ok.status_code, 200)
+            self.assertEqual(ok.json()["environment"], "live")
 
 
 if __name__ == "__main__":
