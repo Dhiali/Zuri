@@ -1,13 +1,27 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useZuriAuth, ZuriAuthGate } from "./auth";
+import {
+  addJournalEntry,
+  deleteJournalEntry,
+  initialWatchlistSymbols,
+  loadJournalEntries,
+  loadUserProfile,
+  loadUserPreferences,
+  loadWatchlist,
+  saveUserProfile,
+  saveUserPreferences,
+  saveWatchlist,
+  type JournalEntry,
+  type JournalSide,
+  type UserProfile,
+  type UserPreferences,
+} from "./user-data";
 
 type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
 type SettingsTab = "Account" | "Broker" | "Trading" | "Risk" | "Platform" | "Display" | "Notifications" | "Security";
 type Instrument = { symbol: string; name: string; price: string; change: string; up: boolean; icon: string; group: string; tickDirection?: "up" | "down"; tickSequence?: number };
-type JournalSide = "Watching" | "Long" | "Short";
-type JournalEntry = { id: string; symbol: string; timeframe: string; side: JournalSide; setup: string; entry: string; stop: string; target: string; note: string; createdAt: string };
 type MarketNewsArticle = { id: string; title: string; summary: string; source: string; published_at: string | null; url: string; related_symbols: string[]; market_wide: boolean };
 type MarketNewsResponse = { articles: MarketNewsArticle[]; fetched_at: string; refresh_after_seconds: number; sources: string[]; warnings: string[] };
 
@@ -19,38 +33,6 @@ const initialInstruments: Instrument[] = [
   { symbol: "GOLD", name: "Gold Spot / U.S. Dollar", price: "4,184.70", change: "+0.24%", up: true, icon: "Au", group: "Commodities" },
   { symbol: "AAPL", name: "Apple Inc.", price: "257.13", change: "−0.18%", up: false, icon: "A", group: "Stocks" },
 ];
-
-const watchlistStorageKey = "zuri-watchlist-symbols";
-const defaultWatchlistSnapshot = JSON.stringify(initialInstruments.map((instrument) => instrument.symbol));
-
-function subscribeToWatchlist(onStoreChange: () => void) {
-  const handleChange = () => onStoreChange();
-  window.addEventListener("storage", handleChange);
-  window.addEventListener("zuri-watchlist-change", handleChange);
-  return () => {
-    window.removeEventListener("storage", handleChange);
-    window.removeEventListener("zuri-watchlist-change", handleChange);
-  };
-}
-
-function getWatchlistSnapshot() {
-  const saved = window.localStorage.getItem(watchlistStorageKey);
-  if (!saved) return defaultWatchlistSnapshot;
-  try {
-    const parsed = JSON.parse(saved);
-    if (Array.isArray(parsed)) {
-      const knownSymbols = new Set(initialInstruments.map((instrument) => instrument.symbol));
-      return JSON.stringify([...new Set(parsed.filter((symbol): symbol is string => typeof symbol === "string" && knownSymbols.has(symbol)))]);
-    }
-  } catch {
-    window.localStorage.removeItem(watchlistStorageKey);
-  }
-  return defaultWatchlistSnapshot;
-}
-
-function getServerWatchlistSnapshot() {
-  return defaultWatchlistSnapshot;
-}
 
 const simulatedTickSizes: Record<string, number> = { BTCUSD: 18, ETHUSD: 1.4, SOLUSD: 0.18, EURUSD: 0.00015, GOLD: 0.45, AAPL: 0.16 };
 
@@ -82,17 +64,6 @@ const tradingViewSymbols: Record<string, string> = {
   AAPL: "NASDAQ:AAPL",
 };
 const tradingViewIntervals: Record<string, string> = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1D": "D", "1W": "W" };
-
-function readJournalEntries(): JournalEntry[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const savedEntries = window.localStorage.getItem("zuri-journal-entries");
-    return savedEntries ? JSON.parse(savedEntries) as JournalEntry[] : [];
-  } catch {
-    window.localStorage.removeItem("zuri-journal-entries");
-    return [];
-  }
-}
 
 function Icon({ name }: { name: string }) {
   const paths: Record<string, string> = {
@@ -149,10 +120,13 @@ export default function Home() {
 function TradingWorkspace() {
   const { session, signOut } = useZuriAuth();
   const [accountError, setAccountError] = useState("");
+  const [dataError, setDataError] = useState("");
   const [section, setSection] = useState<Section>("Charts");
   const [instruments, setInstruments] = useState(initialInstruments);
-  const watchlistSnapshot = useSyncExternalStore(subscribeToWatchlist, getWatchlistSnapshot, getServerWatchlistSnapshot);
-  const watchlistSymbols = JSON.parse(watchlistSnapshot) as string[];
+  const [watchlistSymbols, setWatchlistSymbols] = useState(initialWatchlistSymbols);
+  const watchlistSnapshot = JSON.stringify(watchlistSymbols);
+  const [userPreferences, setUserPreferences] = useState<UserPreferences | null>(null);
+  const [workspaceDataUserId, setWorkspaceDataUserId] = useState<string | null>(null);
   const watchlistInstruments = instruments.filter((instrument) => watchlistSymbols.includes(instrument.symbol));
   const [selectedSymbol, setSelectedSymbol] = useState(initialInstruments[0].symbol);
   const [timeframe, setTimeframe] = useState("15m");
@@ -163,7 +137,7 @@ function TradingWorkspace() {
   const [aiExpanded, setAiExpanded] = useState(false);
   const [aiOnChart, setAiOnChart] = useState(false);
   const [watchlistOpen, setWatchlistOpen] = useState(true);
-  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>(readJournalEntries);
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [journalDraftOpen, setJournalDraftOpen] = useState(false);
   const [journalDraftSide, setJournalDraftSide] = useState<JournalSide>("Watching");
   const [marketNews, setMarketNews] = useState<MarketNewsResponse | null>(null);
@@ -182,8 +156,33 @@ function TradingWorkspace() {
   const filteredInstruments = searchUniverse.filter((item) => `${item.symbol} ${item.name}`.toLowerCase().includes(query.toLowerCase()));
 
   useEffect(() => {
-    localStorage.setItem("zuri-journal-entries", JSON.stringify(journalEntries));
-  }, [journalEntries]);
+    if (!session?.user.id) return;
+    let cancelled = false;
+
+    void Promise.all([
+      loadWatchlist(session.user.id),
+      loadJournalEntries(session.user.id),
+      loadUserPreferences(session.user.id),
+    ]).then(([symbols, entries, preferences]) => {
+      if (cancelled) return;
+      setWatchlistSymbols(symbols);
+      setJournalEntries(entries);
+      setUserPreferences(preferences);
+      setSelectedSymbol(symbols.includes(preferences.default_symbol)
+        ? preferences.default_symbol
+        : symbols[0] ?? initialInstruments[0].symbol);
+      setTimeframe(preferences.default_timeframe);
+      setWorkspaceDataUserId(session.user.id);
+      setDataError("");
+    }).catch((loadError: unknown) => {
+      if (cancelled) return;
+      setDataError(loadError instanceof Error ? loadError.message : "Unable to load your saved workspace data.");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user.id]);
 
   useEffect(() => {
     const ticker = window.setInterval(() => {
@@ -237,24 +236,51 @@ function TradingWorkspace() {
     setAssistantOpen(true);
   };
 
-  const saveJournalEntry = (entry: Omit<JournalEntry, "id" | "createdAt">) => {
-    setJournalEntries((current) => [{ ...entry, id: crypto.randomUUID(), createdAt: new Date().toISOString() }, ...current]);
-    setJournalDraftOpen(false);
-    setSection("Journal");
+  const saveJournalEntry = async (entry: Omit<JournalEntry, "id" | "createdAt">) => {
+    if (!session?.user.id) return;
+    try {
+      const savedEntry = await addJournalEntry(session.user.id, entry);
+      setJournalEntries((current) => [savedEntry, ...current]);
+      setJournalDraftOpen(false);
+      setSection("Journal");
+      setDataError("");
+    } catch (saveError) {
+      setDataError(saveError instanceof Error ? saveError.message : "Unable to save your journal entry.");
+    }
+  };
+
+  const removeJournalEntry = async (entryId: string) => {
+    if (!session?.user.id) return;
+    try {
+      await deleteJournalEntry(session.user.id, entryId);
+      setJournalEntries((current) => current.filter((entry) => entry.id !== entryId));
+      setDataError("");
+    } catch (deleteError) {
+      setDataError(deleteError instanceof Error ? deleteError.message : "Unable to delete your journal entry.");
+    }
+  };
+
+  const updateWatchlist = async (symbols: string[]) => {
+    if (!session?.user.id) return;
+    try {
+      await saveWatchlist(session.user.id, symbols);
+      setWatchlistSymbols(symbols);
+      setDataError("");
+    } catch (saveError) {
+      setDataError(saveError instanceof Error ? saveError.message : "Unable to update your watchlist.");
+    }
   };
 
   const removeInstrument = (symbolToRemove: string) => {
-    const remainingSymbols = watchlistSymbols.filter((symbol) => symbol !== symbolToRemove);
-    localStorage.setItem(watchlistStorageKey, JSON.stringify(remainingSymbols));
-    window.dispatchEvent(new Event("zuri-watchlist-change"));
+    const remainingSymbols = watchlistSymbols.filter((item) => item !== symbolToRemove);
+    void updateWatchlist(remainingSymbols);
     const remaining = watchlistInstruments.filter((instrument) => instrument.symbol !== symbolToRemove);
     if (selectedSymbol === symbolToRemove) setSelectedSymbol(remaining[0]?.symbol ?? initialInstruments[0].symbol);
   };
 
   const addInstrument = (symbolToAdd: string) => {
     if (watchlistSymbols.includes(symbolToAdd)) return;
-    localStorage.setItem(watchlistStorageKey, JSON.stringify([...watchlistSymbols, symbolToAdd]));
-    window.dispatchEvent(new Event("zuri-watchlist-change"));
+    void updateWatchlist([...watchlistSymbols, symbolToAdd]);
     setSelectedSymbol(symbolToAdd);
     setSection("Charts");
     setQuery("");
@@ -268,13 +294,17 @@ function TradingWorkspace() {
         <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">PAPER · DEMO</span></div>
         <div className="topbar-right"><button className="icon-action" title="Search markets" onClick={() => document.getElementById("market-search")?.focus()}>⌕</button><button className="icon-action notification" title="Notifications">♧<i /></button><span className="topbar-email">{session?.user.email}</span><button className="signout-button" onClick={async () => { try { await signOut(); } catch (signOutError) { setAccountError(signOutError instanceof Error ? signOutError.message : "Unable to sign out."); } }}>Sign out</button>{accountError && <span className="topbar-auth-error" role="alert">{accountError}</span>}</div>
       </header>
-      <div className="workspace">
+      <div className={section === "Settings" ? "workspace settings-workspace" : "workspace"}>
         <nav className="primary-nav" aria-label="Primary navigation">
           <div className="nav-main">{(["Charts", "Dashboard", "Trade", "History", "Journal"] as Section[]).map((item) => <button key={item} onClick={() => setSection(item)} className={section === item ? "nav-item selected" : "nav-item"} title={item}><Icon name={item}/><span>{item}</span></button>)}</div>
           <div className="nav-bottom"><button onClick={() => setSection("Settings")} className={section === "Settings" ? "nav-item selected" : "nav-item"} title="Settings"><Icon name="Settings"/><span>Settings</span></button><div className="nav-help">?</div></div>
         </nav>
         <div className="content-column">
-          <div className="page-heading"><div><div className="eyebrow">PERSONAL TRADING DESK <span>•</span> FRI, OCT 02</div><h1>{section === "Charts" ? "Charts" : section}</h1></div><div className="heading-actions"><button className="outline-button">⌖ <span>Connect broker</span></button><button className="solid-button" onClick={() => { setSection("Trade"); setOrderPlaced(false); }}>＋ <span>New order</span></button></div></div>
+          <div className="page-heading"><div><div className="eyebrow">PERSONAL TRADING DESK <span>•</span> FRI, OCT 02</div><h1>{section === "Charts" ? "Charts" : section}</h1></div></div>
+          {dataError && <div className="auth-error" role="alert">{dataError}</div>}
+          {workspaceDataUserId !== session?.user.id ? (
+            <div className="content-card"><p>{dataError ? "Your saved workspace data could not be loaded. Please try again after checking the database setup." : "Loading your saved workspace…"}</p></div>
+          ) : <>
           {section === "Charts" && <>
             <div className="journal-chart-bar">
               <div className="journal-chart-symbol"><span className={`watch-icon ${symbol.group.toLowerCase()}`}>{symbol.icon}</span><span><b>{symbol.symbol}</b><small>{symbol.name}</small></span></div>
@@ -308,10 +338,16 @@ function TradingWorkspace() {
           )}
           {section === "Trade" && <TradeView symbol={symbol} orderSide={orderSide} setOrderSide={setOrderSide} orderPlaced={orderPlaced} setOrderPlaced={setOrderPlaced}/>}
           {section === "History" && <HistoryView/>}
-          {section === "Journal" && <JournalView entries={journalEntries} onNewEntry={() => { setSection("Charts"); setJournalDraftSide("Watching"); setJournalDraftOpen(true); }} onDelete={(id) => setJournalEntries((current) => current.filter((entry) => entry.id !== id))} />}
-          {section === "Settings" && <SettingsView/>}
+          {section === "Journal" && <JournalView entries={journalEntries} onNewEntry={() => { setSection("Charts"); setJournalDraftSide("Watching"); setJournalDraftOpen(true); }} onDelete={(id) => void removeJournalEntry(id)} />}
+          {section === "Settings" && session && <SettingsView userId={session.user.id} email={session.user.email ?? ""} preferences={userPreferences} onSavePreferences={async (preferences) => {
+            await saveUserPreferences(preferences);
+            setUserPreferences(preferences);
+            setTimeframe(preferences.default_timeframe);
+            if (watchlistSymbols.includes(preferences.default_symbol)) setSelectedSymbol(preferences.default_symbol);
+          }} />}
+          </>}
         </div>
-        <aside className={watchlistOpen ? "right-rail" : "right-rail collapsed"}>
+        {section !== "Settings" && <aside className={watchlistOpen ? "right-rail" : "right-rail collapsed"}>
           <div className="rail-head"><div><h2>Quotes</h2><span className="rail-count"><i className="quote-live-dot"/> {watchlistInstruments.length} symbols · SIMULATED</span></div><button className="rail-action" title="Add symbol" onClick={() => document.getElementById("market-search")?.focus()}>＋</button><button className="rail-action" title="Collapse quotes" onClick={() => setWatchlistOpen(false)}>⌄</button></div>
           {watchlistOpen && <>
             <label className="search-box"><span>⌕</span><input id="market-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search quotes"/><kbd>/</kbd></label>
@@ -381,7 +417,7 @@ function TradingWorkspace() {
               onAskAboutStory={askZuriAboutNews}
             />
           </>}
-        </aside>
+        </aside>}
       </div>
       <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>Paper trading <b>ON</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
       <AuraAssistant
@@ -584,14 +620,14 @@ function AuraAssistant({
   );
 }
 
-function JournalCapture({ symbol, timeframe, initialSide, onSave, onCancel }: { symbol: Instrument; timeframe: string; initialSide: JournalSide; onSave: (entry: Omit<JournalEntry, "id" | "createdAt">) => void; onCancel: () => void }) {
+function JournalCapture({ symbol, timeframe, initialSide, onSave, onCancel }: { symbol: Instrument; timeframe: string; initialSide: JournalSide; onSave: (entry: Omit<JournalEntry, "id" | "createdAt">) => void | Promise<void>; onCancel: () => void }) {
   return (
     <section className="journal-capture" aria-labelledby="journal-capture-title">
       <div className="journal-capture-heading"><div><span className="small-label">CHART JOURNAL · {symbol.symbol} · {timeframe}</span><h2 id="journal-capture-title">Capture your plan</h2></div><button className="icon-action" title="Close journal capture" onClick={onCancel}>×</button></div>
       <form onSubmit={(event) => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
-        onSave({ symbol: symbol.symbol, timeframe, side: String(form.get("side")) as JournalSide, setup: String(form.get("setup")), entry: String(form.get("entry")), stop: String(form.get("stop")), target: String(form.get("target")), note: String(form.get("note")).trim() });
+        void onSave({ symbol: symbol.symbol, timeframe, side: String(form.get("side")) as JournalSide, setup: String(form.get("setup")), entry: String(form.get("entry")), stop: String(form.get("stop")), target: String(form.get("target")), note: String(form.get("note")).trim() });
       }}>
         <div className="journal-fields">
           <label className="field-label">Setup<select name="setup" defaultValue="Trade idea"><option>Trade idea</option><option>Pre-trade plan</option><option>Entry review</option><option>Exit review</option><option>Post-trade lesson</option></select></label>
@@ -601,7 +637,7 @@ function JournalCapture({ symbol, timeframe, initialSide, onSave, onCancel }: { 
           <label className="field-label">Target price<input name="target" inputMode="decimal" placeholder="Optional" /></label>
         </div>
         <label className="field-label journal-note-field">Thesis and notes<textarea name="note" required rows={3} placeholder="What is the setup, what confirms it, and what invalidates it?" /></label>
-        <div className="journal-capture-footer"><span>Saved in this browser · chart drawings are not attached</span><div><button type="button" className="outline-button" onClick={onCancel}>Cancel</button><button type="submit" className="solid-button">Save to journal</button></div></div>
+        <div className="journal-capture-footer"><span>Saved to your account · chart drawings are not attached</span><div><button type="button" className="outline-button" onClick={onCancel}>Cancel</button><button type="submit" className="solid-button">Save to journal</button></div></div>
       </form>
     </section>
   );
@@ -610,7 +646,7 @@ function JournalCapture({ symbol, timeframe, initialSide, onSave, onCancel }: { 
 function JournalView({ entries, onNewEntry, onDelete }: { entries: JournalEntry[]; onNewEntry: () => void; onDelete: (id: string) => void }) {
   return (
     <div className="secondary-view journal-view">
-      <div className="section-title journal-view-heading"><div><span className="small-label">CHART-LINKED NOTES · SAVED LOCALLY</span><h2>Trading journal</h2></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
+      <div className="section-title journal-view-heading"><div><span className="small-label">CHART-LINKED NOTES · SAVED TO YOUR ACCOUNT</span><h2>Trading journal</h2></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
       {entries.length === 0 ? <div className="content-card journal-empty"><span className="small-label">NO ENTRIES YET</span><h3>Start with a chart idea</h3><p>Capture a setup, define your risk, and write down what would invalidate the trade.</p><button className="outline-button" onClick={onNewEntry}>Open chart and write a note</button></div> : <div className="journal-entry-list">{entries.map((entry) => <article className="content-card journal-entry" key={entry.id}>
         <div className="journal-entry-heading"><div><span className="small-label">{entry.setup} · {entry.timeframe}</span><h3>{entry.symbol} <span className={`side-pill ${entry.side === "Short" ? "short" : entry.side === "Long" ? "long" : "watching"}`}>{entry.side}</span></h3></div><div className="journal-entry-actions"><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time><button className="text-action" onClick={() => onDelete(entry.id)} aria-label={`Delete ${entry.symbol} journal entry`}>Delete</button></div></div>
         <p>{entry.note}</p>
@@ -997,25 +1033,103 @@ function HistoryView() {
     </div>
   );
 }
-function SettingsView() {
+function SettingsView({
+  userId,
+  email,
+  preferences,
+  onSavePreferences,
+}: {
+  userId: string;
+  email: string;
+  preferences: UserPreferences | null;
+  onSavePreferences: (preferences: UserPreferences) => Promise<void>;
+}) {
   const { deleteAccount } = useZuriAuth();
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("Account");
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profileName, setProfileName] = useState("");
+  const [profileExperience, setProfileExperience] = useState("New to trading");
+  const [profileMarkets, setProfileMarkets] = useState<string[]>([]);
+  const [profileError, setProfileError] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [preferencesDraft, setPreferencesDraft] = useState<UserPreferences | null>(preferences);
+  const [preferencesError, setPreferencesError] = useState("");
+  const [preferencesSaving, setPreferencesSaving] = useState(false);
   const [accountDeleteOpen, setAccountDeleteOpen] = useState(false);
   const [accountDeleteConfirmation, setAccountDeleteConfirmation] = useState("");
   const [accountDeleteBusy, setAccountDeleteBusy] = useState(false);
   const [accountDeleteError, setAccountDeleteError] = useState("");
   const tabs: SettingsTab[] = ["Account", "Broker", "Trading", "Risk", "Platform", "Display", "Notifications", "Security"];
 
-  const accountSummary = [
-    { label: "Account name", value: "Zuri Prime Demo" },
-    { label: "Login", value: "ZT-20491" },
-    { label: "Balance", value: "$24,680.42" },
-    { label: "Equity", value: "$24,782.18" },
-    { label: "Margin", value: "$7,420.00" },
-    { label: "Free margin", value: "$17,362.18" },
-    { label: "Leverage", value: "1:100" },
-    { label: "Currency", value: "USD" },
-  ];
+  useEffect(() => {
+    let cancelled = false;
+    void loadUserProfile(userId).then((loadedProfile) => {
+      if (cancelled) return;
+      setProfile(loadedProfile);
+      setProfileName(loadedProfile.display_name ?? "");
+      setProfileExperience(loadedProfile.trading_experience ?? "New to trading");
+      setProfileMarkets(loadedProfile.primary_markets);
+      setProfileError("");
+    }).catch((loadError: unknown) => {
+      if (!cancelled) setProfileError(loadError instanceof Error ? loadError.message : "Unable to load your profile.");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  const updatePreference = <K extends keyof UserPreferences>(key: K, value: UserPreferences[K]) => {
+    setPreferencesDraft((current) => current ? { ...current, [key]: value } : current);
+  };
+
+  const handleSaveProfile = async () => {
+    if (profileMarkets.length === 0) {
+      setProfileError("Choose at least one market to personalize your workspace.");
+      return;
+    }
+    setProfileSaving(true);
+    setProfileError("");
+    try {
+      const updatedProfile: UserProfile = {
+        id: userId,
+        display_name: profileName.trim() || null,
+        trading_experience: profileExperience,
+        primary_markets: profileMarkets,
+      };
+      await saveUserProfile(updatedProfile);
+      setProfile(updatedProfile);
+    } catch (saveError) {
+      setProfileError(saveError instanceof Error ? saveError.message : "Unable to save your profile.");
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const toggleProfileMarket = (market: string) => {
+    setProfileMarkets((current) => current.includes(market)
+      ? current.filter((item) => item !== market)
+      : [...current, market]);
+  };
+
+  useEffect(() => {
+    if (!preferences || !preferencesDraft || JSON.stringify(preferences) === JSON.stringify(preferencesDraft)) return;
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      setPreferencesSaving(true);
+      setPreferencesError("");
+      void onSavePreferences(preferencesDraft).catch((saveError: unknown) => {
+        if (!cancelled) {
+          setPreferencesError(saveError instanceof Error ? saveError.message : "Unable to save your preferences.");
+        }
+      }).finally(() => {
+        if (!cancelled) setPreferencesSaving(false);
+      });
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [onSavePreferences, preferences, preferencesDraft]);
 
   const brokerSummary = [
     { label: "Broker", value: "Zuri Markets Execution" },
@@ -1033,18 +1147,25 @@ function SettingsView() {
       <>
         <div className="settings-hero">
           <div>
-            <span className="small-label">ACCOUNT STATUS</span>
-            <h3>Connected and ready</h3>
+            <span className="small-label">ZURI PROFILE</span>
+            <h3>Your account details</h3>
           </div>
-          <span className="status-chip success">online</span>
+          <span className="status-chip success">signed in</span>
         </div>
-        <div className="account-stat-grid">
-          {accountSummary.map((item) => (
-            <div key={item.label} className="summary-card">
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-            </div>
-          ))}
+        {profileError && <div className="auth-error" role="alert">{profileError}</div>}
+        <div className="settings-section">
+          <div className="setting-row"><div><b>Email</b><small>Your sign-in address</small></div><strong>{email}</strong></div>
+          <div className="setting-row"><label htmlFor="profile-name"><b>Display name</b><small>Name shown in Zuri</small></label><input id="profile-name" value={profileName} maxLength={60} disabled={!profile} onChange={(event) => setProfileName(event.target.value)} /></div>
+          <div className="setting-row"><label htmlFor="profile-experience"><b>Trading journey</b><small>Your selected experience level</small></label><select id="profile-experience" value={profileExperience} disabled={!profile} onChange={(event) => setProfileExperience(event.target.value)}><option>New to trading</option><option>Learning the basics</option><option>Experienced</option></select></div>
+          <div className="settings-section">
+            <span className="small-label">MARKETS OF INTEREST</span>
+            <div className="auth-choice-grid markets">{["Stocks", "Crypto", "Forex", "Commodities"].map((market) => <button key={market} type="button" disabled={!profile} aria-pressed={profileMarkets.includes(market)} className={profileMarkets.includes(market) ? "auth-choice selected" : "auth-choice"} onClick={() => toggleProfileMarket(market)}>{market}</button>)}</div>
+          </div>
+          {profile && <button className="solid-button" type="button" disabled={profileSaving} onClick={() => void handleSaveProfile()}>{profileSaving ? "Saving profile…" : "Save profile"}</button>}
+        </div>
+        <div className="settings-section">
+          <span className="small-label">SIMULATED ACCOUNT</span>
+          <p>Broker balances and execution details shown in this prototype are demo data and are not stored as account records.</p>
         </div>
       </>
     ),
@@ -1072,17 +1193,17 @@ function SettingsView() {
         <div className="settings-section">
           <span className="small-label">ORDER SETTINGS</span>
           <h3>Execution preferences</h3>
-          <div className="setting-row"><div><b>Order fill policy</b><small>Default execution handling</small></div><select defaultValue="FOK"><option>FOK</option><option>IOC</option><option>GTC</option><option>DAY</option></select></div>
-          <div className="setting-row"><div><b>Trade confirmation</b><small>Require review before submit</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>Enable one-click trading</b><small>Fast manual execution</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>Default order type</b><small>New order baseline</small></div><select defaultValue="Market"><option>Market</option><option>Limit</option><option>Stop</option><option>Stop Limit</option></select></div>
+          <div className="setting-row"><div><b>Order fill policy</b><small>Default execution handling</small></div><select value={preferencesDraft?.order_fill_policy ?? "FOK"} onChange={(event) => updatePreference("order_fill_policy", event.target.value)}><option>FOK</option><option>IOC</option><option>GTC</option><option>DAY</option></select></div>
+          <div className="setting-row"><div><b>Trade confirmation</b><small>Require review before submit</small></div><input type="checkbox" checked={preferencesDraft?.trade_confirmation_required ?? true} onChange={(event) => updatePreference("trade_confirmation_required", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Enable one-click trading</b><small>Fast manual execution</small></div><input type="checkbox" checked={preferencesDraft?.one_click_trading_enabled ?? true} onChange={(event) => updatePreference("one_click_trading_enabled", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Default order type</b><small>New order baseline</small></div><select value={preferencesDraft?.default_order_type ?? "Market"} onChange={(event) => updatePreference("default_order_type", event.target.value)}><option>Market</option><option>Limit</option><option>Stop</option><option>Stop Limit</option></select></div>
         </div>
         <div className="settings-section">
           <span className="small-label">POSITION SETTINGS</span>
           <h3>Trade management</h3>
-          <div className="setting-row"><div><b>Max open positions</b><small>Rolling cap per session</small></div><input type="number" defaultValue={6} /></div>
-          <div className="setting-row"><div><b>Allow hedging</b><small>Multi-directional positions</small></div><input type="checkbox" /></div>
-          <div className="setting-row"><div><b>Auto-close on stop</b><small>Close positions on risk breach</small></div><input type="checkbox" defaultChecked /></div>
+          <div className="setting-row"><div><b>Max open positions</b><small>Rolling cap per session</small></div><input type="number" min={1} max={100} value={preferencesDraft?.max_open_positions ?? 6} onChange={(event) => updatePreference("max_open_positions", Number(event.target.value))} /></div>
+          <div className="setting-row"><div><b>Allow hedging</b><small>Multi-directional positions</small></div><input type="checkbox" checked={preferencesDraft?.allow_hedging ?? false} onChange={(event) => updatePreference("allow_hedging", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Auto-close on stop</b><small>Close positions on risk breach</small></div><input type="checkbox" checked={preferencesDraft?.auto_close_on_stop ?? true} onChange={(event) => updatePreference("auto_close_on_stop", event.target.checked)} /></div>
         </div>
       </>
     ),
@@ -1091,9 +1212,9 @@ function SettingsView() {
         <div className="settings-section">
           <span className="small-label">RISK CONTROLS</span>
           <h3>Portfolio discipline</h3>
-          <div className="setting-row"><div><b>Max daily loss</b><small>Hard stop across account</small></div><input type="text" defaultValue="2.00%" /></div>
-          <div className="setting-row"><div><b>Max trade risk</b><small>Per-trade position sizing cap</small></div><input type="text" defaultValue="0.75%" /></div>
-          <div className="setting-row"><div><b>Max correlation exposure</b><small>Risk concentration limit</small></div><input type="text" defaultValue="35%" /></div>
+          <div className="setting-row"><div><b>Max daily loss (%)</b><small>Hard stop across account</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_daily_loss_percent ?? 2} onChange={(event) => updatePreference("max_daily_loss_percent", Number(event.target.value))} /></div>
+          <div className="setting-row"><div><b>Max trade risk (%)</b><small>Per-trade position sizing cap</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_trade_risk_percent ?? 0.75} onChange={(event) => updatePreference("max_trade_risk_percent", Number(event.target.value))} /></div>
+          <div className="setting-row"><div><b>Max correlation exposure (%)</b><small>Risk concentration limit</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_correlation_exposure_percent ?? 35} onChange={(event) => updatePreference("max_correlation_exposure_percent", Number(event.target.value))} /></div>
           <div className="setting-row"><div><b>Emergency close all</b><small>One-click panic liquidation</small></div><button className="danger-button" type="button">Close all</button></div>
         </div>
       </>
@@ -1103,16 +1224,16 @@ function SettingsView() {
         <div className="settings-section">
           <span className="small-label">PLATFORM</span>
           <h3>Terminal behavior</h3>
-          <div className="setting-row"><div><b>Start at login</b><small>Open workspace automatically</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>Save chart layout</b><small>Remember active chart templates</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>Use Turbo mode</b><small>Reduced latency UI stream</small></div><input type="checkbox" /></div>
-          <div className="setting-row"><div><b>Auto-reconnect</b><small>Restore broker session</small></div><input type="checkbox" defaultChecked /></div>
+          <div className="setting-row"><div><b>Start at login</b><small>Open workspace automatically</small></div><input type="checkbox" checked={preferencesDraft?.start_at_login_enabled ?? true} onChange={(event) => updatePreference("start_at_login_enabled", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Save chart layout</b><small>Remember active chart templates</small></div><input type="checkbox" checked={preferencesDraft?.save_chart_layout_enabled ?? true} onChange={(event) => updatePreference("save_chart_layout_enabled", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Use Turbo mode</b><small>Reduced latency UI stream</small></div><input type="checkbox" checked={preferencesDraft?.turbo_mode_enabled ?? false} onChange={(event) => updatePreference("turbo_mode_enabled", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Auto-reconnect</b><small>Restore broker session</small></div><input type="checkbox" checked={preferencesDraft?.auto_reconnect_enabled ?? true} onChange={(event) => updatePreference("auto_reconnect_enabled", event.target.checked)} /></div>
         </div>
         <div className="settings-section">
           <span className="small-label">CHARTS</span>
           <h3>Workspace defaults</h3>
-          <div className="setting-row"><div><b>Default chart timeframe</b><small>When a new chart opens</small></div><select defaultValue="15m"><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option></select></div>
-          <div className="setting-row"><div><b>Default symbol</b><small>Initial instrument selected</small></div><select defaultValue="BTCUSD"><option>BTCUSD</option><option>ETHUSD</option><option>AAPL</option><option>EURUSD</option></select></div>
+          <div className="setting-row"><div><b>Default chart timeframe</b><small>When a new chart opens</small></div><select value={preferencesDraft?.default_timeframe ?? "15m"} onChange={(event) => updatePreference("default_timeframe", event.target.value)}><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option><option>1D</option><option>1W</option></select></div>
+          <div className="setting-row"><div><b>Default symbol</b><small>Initial instrument selected</small></div><select value={preferencesDraft?.default_symbol ?? "BTCUSD"} onChange={(event) => updatePreference("default_symbol", event.target.value)}>{initialInstruments.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.symbol}</option>)}</select></div>
         </div>
       </>
     ),
@@ -1121,10 +1242,10 @@ function SettingsView() {
         <div className="settings-section">
           <span className="small-label">DISPLAY</span>
           <h3>Theme and layout</h3>
-          <div className="setting-row"><div><b>Color theme</b><small>Workspace palette</small></div><select defaultValue="Midnight"><option>Midnight</option><option>Graphite</option><option>Classic</option><option>High contrast</option></select></div>
-          <div className="setting-row"><div><b>Language</b><small>Interface language</small></div><select defaultValue="English"><option>English</option><option>Deutsch</option><option>Français</option><option>Español</option></select></div>
-          <div className="setting-row"><div><b>Time zone</b><small>Display timestamps</small></div><select defaultValue="UTC"><option>UTC</option><option>New York</option><option>London</option><option>Tokyo</option></select></div>
-          <div className="setting-row"><div><b>Compact mode</b><small>Dense UI layout</small></div><input type="checkbox" /></div>
+          <div className="setting-row"><div><b>Color theme</b><small>Workspace palette</small></div><select value={preferencesDraft?.color_theme ?? "Midnight"} onChange={(event) => updatePreference("color_theme", event.target.value)}><option>Midnight</option><option>Graphite</option><option>Classic</option><option>High contrast</option></select></div>
+          <div className="setting-row"><div><b>Language</b><small>Interface language</small></div><select value={preferencesDraft?.language ?? "English"} onChange={(event) => updatePreference("language", event.target.value)}><option>English</option><option>Deutsch</option><option>Français</option><option>Español</option></select></div>
+          <div className="setting-row"><div><b>Time zone</b><small>Display timestamps</small></div><select value={preferencesDraft?.time_zone ?? "UTC"} onChange={(event) => updatePreference("time_zone", event.target.value)}><option>UTC</option><option>New York</option><option>London</option><option>Tokyo</option></select></div>
+          <div className="setting-row"><div><b>Compact mode</b><small>Dense UI layout</small></div><input type="checkbox" checked={preferencesDraft?.compact_mode ?? false} onChange={(event) => updatePreference("compact_mode", event.target.checked)} /></div>
         </div>
       </>
     ),
@@ -1133,10 +1254,10 @@ function SettingsView() {
         <div className="settings-section">
           <span className="small-label">ALERTS</span>
           <h3>Signal and trade notifications</h3>
-          <div className="setting-row"><div><b>Price alerts</b><small>Triggered by symbol thresholds</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>Execution notifications</b><small>Order and fill alerts</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>Journal reminders</b><small>Post-trade review prompts</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>Desktop push</b><small>Browser and OS popups</small></div><input type="checkbox" /></div>
+          <div className="setting-row"><div><b>Price alerts</b><small>Triggered by symbol thresholds</small></div><input type="checkbox" checked={preferencesDraft?.price_alerts_enabled ?? true} onChange={(event) => updatePreference("price_alerts_enabled", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Execution notifications</b><small>Order and fill alerts</small></div><input type="checkbox" checked={preferencesDraft?.execution_notifications_enabled ?? true} onChange={(event) => updatePreference("execution_notifications_enabled", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Journal reminders</b><small>Post-trade review prompts</small></div><input type="checkbox" checked={preferencesDraft?.journal_reminders_enabled ?? true} onChange={(event) => updatePreference("journal_reminders_enabled", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Desktop push</b><small>Browser and OS popups</small></div><input type="checkbox" checked={preferencesDraft?.desktop_notifications_enabled ?? false} onChange={(event) => updatePreference("desktop_notifications_enabled", event.target.checked)} /></div>
         </div>
       </>
     ),
@@ -1145,15 +1266,15 @@ function SettingsView() {
         <div className="settings-section">
           <span className="small-label">SECURITY</span>
           <h3>Access and protection</h3>
-          <div className="setting-row"><div><b>Two-factor auth</b><small>App-level verification</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>Session timeout</b><small>Inactivity lock period</small></div><select defaultValue="30 min"><option>10 min</option><option>30 min</option><option>1 hour</option><option>4 hours</option></select></div>
-          <div className="setting-row"><div><b>Hide account values</b><small>Mask sensitive numbers</small></div><input type="checkbox" /></div>
-          <div className="setting-row"><div><b>Export permissions</b><small>Allow CSV and PDF reports</small></div><input type="checkbox" defaultChecked /></div>
+          <div className="setting-row"><div><b>Two-factor auth</b><small>Configure available sign-in methods in Supabase</small></div><input type="checkbox" disabled aria-label="Two-factor authentication is not available in this prototype" /></div>
+          <div className="setting-row"><div><b>Session timeout</b><small>Session timeout controls are not available yet</small></div><select value="30 min" disabled aria-label="Session timeout is not available in this prototype"><option>10 min</option><option>30 min</option><option>1 hour</option><option>4 hours</option></select></div>
+          <div className="setting-row"><div><b>Hide account values</b><small>Mask sensitive numbers</small></div><input type="checkbox" checked={preferencesDraft?.hide_account_values ?? false} onChange={(event) => updatePreference("hide_account_values", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Export permissions</b><small>Allow CSV and PDF reports</small></div><input type="checkbox" checked={preferencesDraft?.allow_data_exports ?? true} onChange={(event) => updatePreference("allow_data_exports", event.target.checked)} /></div>
         </div>
         <div className="settings-section account-danger-zone">
           <span className="small-label">DANGER ZONE</span>
           <h3>Delete your Zuri account</h3>
-          <p>This permanently deletes your Zuri sign-in account and clears this browser’s Zuri journal and watchlist. You will be signed out and shown the introduction again.</p>
+          <p>This permanently deletes your Zuri sign-in account, profile, saved preferences, journal entries, and watchlist. You will be signed out and shown the introduction again.</p>
           {!accountDeleteOpen ? (
             <button className="danger-button" type="button" onClick={() => { setAccountDeleteOpen(true); setAccountDeleteError(""); }}>Delete account</button>
           ) : (
@@ -1183,13 +1304,9 @@ function SettingsView() {
 
   return (
     <div className="secondary-view settings-view">
-      <div className="section-title settings-header">
-        <div>
-          <span className="small-label">PREFERENCES</span>
-          <h2>Settings</h2>
-        </div>
-        <button className="solid-button" type="button">✓ <span>Save changes</span></button>
-      </div>
+      {preferencesError && <div className="auth-error" role="alert">{preferencesError}</div>}
+      {!preferencesDraft && <div className="auth-message" role="status">Loading your saved preferences…</div>}
+      {preferencesSaving && <div className="auth-message" role="status">Saving your preferences…</div>}
 
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
@@ -1221,7 +1338,7 @@ function SettingsView() {
         </div>
         <div className="settings-footer-card">
           <span className="small-label">ACCOUNT</span>
-          <strong>{accountSummary[1].value}</strong>
+          <strong>{email}</strong>
         </div>
       </div>
     </div>

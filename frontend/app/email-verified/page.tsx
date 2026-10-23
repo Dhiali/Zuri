@@ -49,7 +49,7 @@ export default function EmailVerifiedPage() {
           <>
             <span className="auth-card-kicker">EMAIL CONFIRMED</span>
             <h1>You’re all set.</h1>
-            <p>Your email address has been verified. You can close this tab and return to the Zuri tab where you started.</p>
+            <p>Your email address has been verified. You can close this tab and return to the Zuri tab where you started. If the first tab doesn’t move to the next phase, refresh the page.</p>
             <span className="email-verified-hint">Welcome to Zuri Markets · Educational demo workspace</span>
           </>
         ) : (

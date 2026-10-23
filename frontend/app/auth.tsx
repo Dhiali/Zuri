@@ -13,8 +13,9 @@ import {
 import Link from "next/link";
 import type { Session } from "@supabase/supabase-js";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "./supabase";
+import { saveUserProfile } from "./user-data";
 
-type AuthStatus = "loading" | "intro" | "welcome" | "sign-in" | "sign-up" | "onboarding" | "workspace" | "reset-password";
+type AuthStatus = "loading" | "intro" | "welcome" | "sign-in" | "sign-up" | "set-password" | "onboarding" | "workspace" | "reset-password";
 type Experience = "New to trading" | "Learning the basics" | "Experienced";
 type Market = "Stocks" | "Crypto" | "Forex" | "Commodities";
 type SocialProvider = "google";
@@ -83,6 +84,11 @@ export function useZuriAuth() {
 
 function statusForSession(session: Session | null): AuthStatus {
   if (!session) return signedOutStatus();
+  const providers = session.user.app_metadata.providers;
+  const usedGoogle = Array.isArray(providers)
+    ? providers.includes("google")
+    : session.user.app_metadata.provider === "google";
+  if (usedGoogle && session.user.user_metadata.password_created !== true) return "set-password";
   return session.user.user_metadata.onboarding_completed === true ? "workspace" : "onboarding";
 }
 
@@ -114,9 +120,11 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
   const [activeProvider, setActiveProvider] = useState<SocialProvider | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [accountPassword, setAccountPassword] = useState("");
+  const [confirmAccountPassword, setConfirmAccountPassword] = useState("");
   const [name, setName] = useState("");
   const [introStep, setIntroStep] = useState(0);
-  const [experience, setExperience] = useState<Experience>("New to trading");
+  const [experience, setExperience] = useState<Experience | null>(null);
   const [markets, setMarkets] = useState<Market[]>([]);
 
   useEffect(() => {
@@ -340,9 +348,52 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
     }
   };
 
+  const createAccountPassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    if (accountPassword.length < 8) {
+      setError("Choose a password with at least 8 characters.");
+      return;
+    }
+    if (accountPassword !== confirmAccountPassword) {
+      setError("The passwords do not match.");
+      return;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase || !session) {
+      setError("Your sign-in session expired. Please sign in with Google again.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: accountPassword,
+        data: { password_created: true },
+      });
+      if (updateError) throw updateError;
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      setSession(data.session);
+      setStatus(statusForSession(data.session));
+      setAccountPassword("");
+      setConfirmAccountPassword("");
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : "Unable to create your password. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const finishOnboarding = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
+    if (!experience) {
+      setError("Choose where you are in your trading journey to continue.");
+      return;
+    }
     if (markets.length === 0) {
       setError("Choose at least one market to personalize your workspace.");
       return;
@@ -356,6 +407,13 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
 
     setBusy(true);
     try {
+      if (!session) throw new Error("Your session expired. Please sign in again.");
+      await saveUserProfile({
+        id: session.user.id,
+        display_name: name.trim() || null,
+        trading_experience: experience,
+        primary_markets: markets,
+      });
       const { data, error: updateError } = await supabase.auth.updateUser({
         data: {
           display_name: name.trim(),
@@ -433,7 +491,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
               <div className="auth-top-actions"><span>Already have an account?</span><button type="button" className="auth-text-button" onClick={() => continueFromIntro("sign-in")}>Sign in</button></div>
             ) : visibleStatus === "welcome" ? (
               <div className="auth-top-actions"><span>Already have an account?</span><button type="button" className="auth-text-button" onClick={() => switchStatus("sign-in")}>Sign in</button></div>
-            ) : (
+            ) : visibleStatus === "onboarding" || visibleStatus === "set-password" ? null : (
               <button type="button" className="auth-text-button" onClick={() => switchStatus("welcome")}>Back to home</button>
             )}
           </header>
@@ -470,8 +528,8 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
           ) : (
           <div className={`auth-content ${visibleStatus === "welcome" ? "welcome-content" : ""}`}>
             <section className="auth-story">
-              <span className="auth-eyebrow"><i /> YOUR MARKET, IN FOCUS</span>
-              <h1>{visibleStatus === "welcome" ? <>Trade with a little more <em>clarity.</em></> : visibleStatus === "onboarding" ? <>A desk that starts with <em>you.</em></> : <>A calmer way to meet the <em>markets.</em></>}</h1>
+              <span className="auth-eyebrow auth-market-glow">YOUR MARKET, IN FOCUS</span>
+              <h1>{visibleStatus === "welcome" ? <>Trade with a little more <em>clarity.</em></> : visibleStatus === "onboarding" ? <>A desk that starts with <em>you.</em></> : visibleStatus === "set-password" ? <>One more step for your <em>account.</em></> : <>A calmer way to meet the <em>markets.</em></>}</h1>
               <p className="auth-story-copy">A thoughtful trading workspace for charts, plans, and perspective. Start with a demo desk, build better habits, and keep risk in view.</p>
               <div className="auth-preview" aria-label="Example Zuri market chart">
                 <div className="auth-preview-top"><div><span className="auth-preview-symbol">BTC</span><span>Bitcoin / U.S. Dollar</span></div><span className="auth-demo-badge"><i /> DEMO MARKET</span></div>
@@ -499,6 +557,20 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                   <SocialSignInButtons disabled={busy} activeProvider={activeProvider} onProvider={startSocialSignIn} />
                   {!isSupabaseConfigured && <div className="auth-setup-note"><b>One quick setup step remains</b><span>Connect Zuri to Supabase to enable secure accounts. See the setup steps in the frontend README.</span></div>}
                   <div className="auth-fineprint">By continuing, you agree to use Zuri as an educational demo workspace. Market data shown here may be simulated.</div>
+                </>
+              )}
+
+              {visibleStatus === "set-password" && (
+                <>
+                  <span className="auth-card-kicker">SECURE YOUR ACCOUNT</span>
+                  <h2>Create a password</h2>
+                  <p>Create a password to continue. You can use it to sign in with your email as well as Google.</p>
+                  {error && <div className="auth-error" role="alert">{error}</div>}
+                  <form className="auth-form" onSubmit={createAccountPassword}>
+                    <label>Password<input type="password" autoComplete="new-password" value={accountPassword} onChange={(event) => setAccountPassword(event.target.value)} minLength={8} required /></label>
+                    <label>Confirm password<input type="password" autoComplete="new-password" value={confirmAccountPassword} onChange={(event) => setConfirmAccountPassword(event.target.value)} minLength={8} required /></label>
+                    <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Creating password…" : "Create password"} <span>→</span></button>
+                  </form>
                 </>
               )}
 
@@ -537,13 +609,12 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
 
               {visibleStatus === "onboarding" && (
                 <>
-                  <span className="auth-card-kicker">YOUR FIRST 60 SECONDS</span>
                   <h2>Let’s set up your desk.</h2>
                   <p>A couple of quick choices help tailor your starting workspace.</p>
                   {error && <div className="auth-error" role="alert">{error}</div>}
                   <form className="auth-form onboarding-form" onSubmit={finishOnboarding}>
                     <label>What should we call you?<input type="text" autoComplete="given-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name (optional)" maxLength={60} /></label>
-                    <fieldset><legend>Where are you in your trading journey?</legend><div className="auth-choice-grid">{(["New to trading", "Learning the basics", "Experienced"] as Experience[]).map((option) => <button key={option} type="button" className={experience === option ? "auth-choice selected" : "auth-choice"} onClick={() => setExperience(option)}>{option}</button>)}</div></fieldset>
+                    <fieldset><legend>Where are you in your trading journey? <small>Required</small></legend><div className="auth-choice-grid">{(["New to trading", "Learning the basics", "Experienced"] as Experience[]).map((option) => <button key={option} type="button" aria-pressed={experience === option} className={experience === option ? "auth-choice selected" : "auth-choice"} onClick={() => setExperience(option)}>{option}</button>)}</div></fieldset>
                     <fieldset><legend>Which markets interest you? <small>Choose at least one</small></legend><div className="auth-choice-grid markets">{(["Stocks", "Crypto", "Forex", "Commodities"] as Market[]).map((market) => <button key={market} type="button" aria-pressed={markets.includes(market)} className={markets.includes(market) ? "auth-choice selected" : "auth-choice"} onClick={() => setMarkets((current) => current.includes(market) ? current.filter((item) => item !== market) : [...current, market])}>{market}</button>)}</div></fieldset>
                     <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Saving your desk…" : "Open my trading desk"} <span>→</span></button>
                   </form>

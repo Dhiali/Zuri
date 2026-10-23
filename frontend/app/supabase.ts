@@ -12,6 +12,13 @@ export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 export function getSupabaseBrowserClient(): SupabaseClient | null {
   if (!isSupabaseConfigured || !supabaseUrl || !supabaseAnonKey) return null;
 
-  browserClient ??= createClient(supabaseUrl, supabaseAnonKey);
+  browserClient ??= createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      flowType: "pkce",
+    },
+  });
   return browserClient;
 }

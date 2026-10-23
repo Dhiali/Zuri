@@ -22,7 +22,20 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 ## Sign-in and first-time setup
 
-Zuri uses Supabase Auth for email/password accounts. First-time visitors see a short product introduction before sign-up or sign-in. Completing or skipping it is remembered in this browser; signing out does not show it again. Deleting an account from **Settings → Security** resets the introduction for the next visit. New accounts also complete a short preferences onboarding before entering the workspace. Email confirmation and password reset are supported. Onboarding preferences are saved to the signed-in user's Supabase metadata.
+Zuri uses Supabase Auth for email/password accounts. First-time visitors see a short product introduction before sign-up or sign-in. Completing or skipping it is remembered in this browser; signing out does not show it again. Deleting an account from **Settings → Security** resets the introduction for the next visit. New accounts also complete a short preferences onboarding before entering the workspace. Email confirmation and password reset are supported. Onboarding completion is saved to Auth metadata; profile details and preferences are saved in Supabase PostgreSQL.
+
+## Database foundation
+
+Supabase Auth and Supabase PostgreSQL are the source of truth for Zuri accounts and user-owned data. The migrations in `supabase/migrations/` create:
+
+- `profiles` for a user's display name and onboarding preferences.
+- `user_preferences` for typed display, chart, trading, risk, and notification settings. Broker credentials and account balances do not belong in this table.
+- `journal_entries` for user-owned trade notes and plans.
+- `watchlist_items` for each user's ordered symbols.
+
+Every table is linked to `auth.users`, has row-level security enabled, and only permits signed-in users to access their own rows. New and existing Auth users receive a profile and default preferences. Deleting an Auth user cascades to their database rows.
+
+To create or update the schema in the Supabase project, open **SQL Editor** and run each migration in timestamp order, once: [`20261023000000_initial_user_data.sql`](../supabase/migrations/20261023000000_initial_user_data.sql), [`20261023000001_atomic_watchlist_update.sql`](../supabase/migrations/20261023000001_atomic_watchlist_update.sql), [`20261023000002_backfill_existing_profiles.sql`](../supabase/migrations/20261023000002_backfill_existing_profiles.sql), then [`20261023000003_add_workspace_preferences.sql`](../supabase/migrations/20261023000003_add_workspace_preferences.sql). If the initial schema migration was already applied, run only the newer migration(s). Keep future database changes as new, timestamped SQL migrations under `supabase/migrations/`; do not edit an already-applied migration. The app reads and writes the profile, user preferences, journal, and watchlist tables directly through the signed-in user's Supabase session and row-level security. Existing browser journal and watchlist data is imported for the signed-in user on their first workspace load, then removed from local storage only after a successful import. Some preferences are stored for future use but do not yet change app behavior. Broker controls, balances, executions, and other prototype data remain simulated and are not saved as real broker data.
 
 To connect authentication:
 
@@ -32,13 +45,17 @@ To connect authentication:
 4. Copy the project's URL and its publishable (or legacy anon) key from the Supabase project settings. Copy the publishable/anon key only; never put a `service_role` or secret key in the frontend.
 5. Copy `frontend/.env.example` to `frontend/.env.local` and fill in `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 6. Copy `backend/.env.example` to `backend/.env` and fill in `SUPABASE_URL` and `SUPABASE_ANON_KEY` with the same project values. To enable account deletion, also set `SUPABASE_SERVICE_ROLE_KEY` to the project's server-side service role key. Keep this key only in the backend environment; never put it in frontend code or `frontend/.env.local`. Keep any existing private integration keys in this file.
-7. Restart the frontend, then try **Continue with Google** from the welcome or sign-in screen. New social accounts continue to Zuri's preferences onboarding. Email/password signup still uses email confirmation; after verification, the link opens a confirmation page that tells the user to return to their original Zuri tab.
+7. Restart the frontend, then try **Continue with Google** from the welcome or sign-in screen. Google accounts must create a Zuri password before continuing to preferences onboarding; they can use it to sign in with email as well as Google. Email/password signup still uses email confirmation; after verification, the link opens a confirmation page that tells the user to return to their original Zuri tab.
+
+### Keep users signed in
+
+The browser client uses Supabase's PKCE authorization-code flow, stores the resulting session across reloads, and automatically refreshes access tokens. After changing the flow, sign in once again so Supabase can establish a PKCE session. To allow users to return after a day without signing in again, open **Authentication → Sessions** in Supabase and make sure the **Inactivity timeout** is disabled or longer than one day and the **Time-boxed session** is disabled or longer than one day. A user is still signed out if they choose **Sign out**, delete their account, clear browser storage, or their refresh token is revoked.
 
 Google sign-in authenticates the Zuri account only. It does not connect a brokerage account or grant Zuri access to trading data.
 
 The backend verifies Supabase access tokens for account, position, order, trade-execution, and AI-chat endpoints. Market news remains public. The browser-side workspace gate is for navigation; backend token verification is the security boundary. The current workspace still contains simulated account and quote data, and account onboarding does not connect a brokerage account.
 
-Account deletion is performed by the backend using the authenticated user's verified Supabase ID and the server-only `SUPABASE_SERVICE_ROLE_KEY`. It permanently removes that Supabase Auth user; the local journal and watchlist in the current browser are also cleared. Configure the backend service-role key before using **Settings → Security → Delete account**.
+Account deletion is performed by the backend using the authenticated user's verified Supabase ID and the server-only `SUPABASE_SERVICE_ROLE_KEY`. It permanently removes that Supabase Auth user, and the schema's foreign keys also delete that user's profile, preferences, journal entries, and watchlist rows. Configure the backend service-role key before using **Settings → Security → Delete account**.
 
 ### Brand account emails as Zuri
 
