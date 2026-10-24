@@ -1,5 +1,6 @@
 ﻿import json
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -135,6 +136,24 @@ class AlpacaAdapter:
             for o in data
         ]
 
+    def history(self, limit: int = 200):
+        data = _request("GET", f"{self.base}/v2/orders", headers=self.headers, params={"status": "closed", "limit": limit, "direction": "desc"})
+        fills = []
+        for o in data:
+            qty, price = _num(o.get("filled_qty")), _num(o.get("filled_avg_price"))
+            if not qty or price is None or not o.get("filled_at"):
+                continue
+            fills.append({"id": o.get("id"), "symbol": o.get("symbol"), "side": o.get("side"), "quantity": qty, "price": price, "time": o.get("filled_at")})
+        return {"fills": fills, "round_trips": None}
+
+    def candles(self, symbol: str, count: int = 80):
+        start = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        data = _request(
+            "GET", f"https://data.alpaca.markets/v2/stocks/{symbol}/bars", headers=self.headers,
+            params={"timeframe": "15Min", "start": start, "limit": 1000, "feed": "iex", "adjustment": "raw"},
+        )
+        return [{"t": b["t"], "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"]} for b in (data.get("bars") or [])][-count:]
+
     def close_all(self):
         _request("DELETE", f"{self.base}/v2/orders", headers=self.headers)
         _request("DELETE", f"{self.base}/v2/positions", headers=self.headers, params={"cancel_orders": "true"})
@@ -197,6 +216,35 @@ class OandaAdapter:
         fill = data.get("orderFillTransaction") or data.get("orderCreateTransaction") or {}
         return {"order_id": fill.get("id"), "status": "filled" if data.get("orderFillTransaction") else "submitted"}
 
+    def history(self, limit: int = 100):
+        trades = _request("GET", f"{self.base}/trades", headers=self.headers, params={"state": "CLOSED", "count": limit}).get("trades", [])
+        round_trips, fills = [], []
+        for t in trades:
+            units = _num(t.get("initialUnits")) or 0.0
+            entry, exit_price = _num(t.get("price")), _num(t.get("averageClosePrice"))
+            if not units or entry is None or not t.get("closeTime"):
+                continue
+            side = "long" if units > 0 else "short"
+            round_trips.append({
+                "id": t.get("id"), "symbol": t.get("instrument"), "side": side, "quantity": abs(units),
+                "entry_price": entry, "exit_price": exit_price, "opened_at": t.get("openTime"),
+                "closed_at": t.get("closeTime"), "realized_pl": _num(t.get("realizedPL")),
+            })
+            fills.append({"id": f"{t.get('id')}-open", "symbol": t.get("instrument"), "side": "buy" if units > 0 else "sell", "quantity": abs(units), "price": entry, "time": t.get("openTime")})
+            fills.append({"id": f"{t.get('id')}-close", "symbol": t.get("instrument"), "side": "sell" if units > 0 else "buy", "quantity": abs(units), "price": exit_price, "time": t.get("closeTime")})
+        return {"fills": fills, "round_trips": round_trips}
+
+    def candles(self, symbol: str, count: int = 80):
+        host = self.base.split("/v3/")[0]
+        data = _request("GET", f"{host}/v3/instruments/{symbol}/candles", headers=self.headers, params={"granularity": "M15", "count": count, "price": "M"})
+        result = []
+        for c in data.get("candles", []):
+            mid = c.get("mid") or {}
+            values = [_num(mid.get(k)) for k in ("o", "h", "l", "c")]
+            if None not in values:
+                result.append({"t": c.get("time"), "o": values[0], "h": values[1], "l": values[2], "c": values[3]})
+        return result
+
 
 class TradierAdapter:
     def __init__(self, creds: dict[str, str], environment: str):
@@ -255,6 +303,30 @@ class TradierAdapter:
         )
         order = data.get("order", {})
         return {"order_id": order.get("id"), "status": order.get("status")}
+
+    def history(self, limit: int = 200):
+        orders = (_request("GET", f"{self.base}/orders", headers=self.headers).get("orders") or {})
+        items = orders.get("order", []) if isinstance(orders, dict) else []
+        if isinstance(items, dict):
+            items = [items]
+        fills = []
+        for o in items:
+            qty = _num(o.get("exec_quantity")) or _num(o.get("quantity"))
+            price = _num(o.get("avg_fill_price"))
+            when = o.get("transaction_date") or o.get("create_date")
+            if o.get("status") != "filled" or not qty or price is None or not when:
+                continue
+            fills.append({"id": str(o.get("id")), "symbol": o.get("symbol"), "side": "buy" if str(o.get("side")).startswith("buy") else "sell", "quantity": qty, "price": price, "time": when})
+        return {"fills": fills[:limit], "round_trips": None}
+
+    def candles(self, symbol: str, count: int = 80):
+        host = self.base.split("/v1/")[0]
+        start = (datetime.now(timezone.utc) - timedelta(days=6)).strftime("%Y-%m-%d %H:%M")
+        data = _request("GET", f"{host}/v1/markets/timesales", headers=self.headers, params={"symbol": symbol, "interval": "15min", "start": start, "session_filter": "open"})
+        rows = ((data.get("series") or {}).get("data")) or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        return [{"t": r.get("time"), "o": r.get("open"), "h": r.get("high"), "l": r.get("low"), "c": r.get("close")} for r in rows][-count:]
 
 
 ADAPTERS = {"alpaca": AlpacaAdapter, "oanda": OandaAdapter, "tradier": TradierAdapter}

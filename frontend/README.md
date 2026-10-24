@@ -101,6 +101,24 @@ Settings → Broker lets each user link their own **Alpaca**, **OANDA** or **Tra
 
 OAuth (Alpaca Connect, Tradier, Coinbase), Interactive Brokers and Binance/Coinbase are not implemented yet: OAuth needs Zuri to be registered as an app with each broker, and IBKR needs its Client Portal gateway.
 
+## Zuri guided journey
+
+After sign-up, new users meet Zuri (an animated mascot), take a short dashboard tour, choose **Training buddy** or **Assistant** mode, and, for Training buddy, take a 10-question quiz that sets their level (Foundations / Building / Advancing). A dashboard checklist then walks them through opening a free Alpaca paper account, creating API keys, linking the broker, a first paper trade, a journal note and risk limits. Progress is stored in `public.zuri_journey`; run `supabase/migrations/20261024000000_zuri_journey.sql` in the Supabase SQL editor. The assistant uses the mode and level to adapt its tone. Existing users see the intro once.
+
+## Journey tracking and AI journal
+
+Zuri records the user's whole journey automatically: pairs added to or removed from the watchlist, charts opened, every order placed through Zuri (with stop-loss, size versus equity, and whether it was an entry or an exit with an estimated result), and positions opened outside Zuri, which are detected from the linked broker. Each captured trade also creates an "auto-captured" journal entry, and **Ask Zuri to write the note** drafts its reasoning from the recorded timeline.
+
+The Journal tab computes facts from those events (interest-to-trade conversion, time to first trade, trades without a stop-loss, planning and note rates, position size, busiest day, win rate on closed trades) and **Analyse my journey** sends them to the AI for a leak and strategy report. The AI is told to use only the supplied figures. Realized P&L is an estimate from the price at the time of the exit order, and patterns are labelled tentative on small samples. Apply `supabase/migrations/20261024000001_journey_events.sql` in the Supabase SQL editor. Endpoints: `POST /api/journal/events`, `POST /api/journal/sync`, `GET /api/journal/insights`, `POST /api/journal/analyze`, `POST /api/journal/entries/{id}/ai-note`.
+
+## History and chart snapshots
+
+The History tab reads real closed trades, orders and open positions from the linked broker (Alpaca and Tradier closed trades are paired from filled orders, so P&L is an estimate) and can export CSV.
+
+Every captured entry or exit (including Close All) also saves a chart snapshot: recent 15-minute broker candles, rendered with Lightweight Charts with entry, stop and target lines. Zuri annotates it from the candle data (support, resistance, stop placement) and the user can re-annotate, use practice mode (annotations hidden until revealed) and download the chart as a PNG. Snapshots show in History and inline on auto-captured journal entries.
+
+Optional "Capture my real TradingView screen" uses the browser's screen-share permission (always prompted) and attaches a still JPEG when an order is placed from the Trade tab. The TradingView embed is cross-origin, so it cannot be captured any other way. Candles are stocks-only on Alpaca. Run migration `20261024000002_trade_snapshots.sql` in Supabase.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

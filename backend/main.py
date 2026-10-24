@@ -5,7 +5,7 @@ import re
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from html import unescape
@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 from threading import Lock
+import threading
 
 import requests
 from dotenv import load_dotenv
@@ -23,6 +24,8 @@ from groq import Groq
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import brokers
+from . import journal as journal_analytics
+from . import sizing
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
@@ -443,6 +446,51 @@ EXPERIENCE_STYLE = {
 }
 
 
+LEVEL_STYLE = {
+    "foundations": " Zuri's quiz placed the user at the Foundations level: use plain language and one small step at a time.",
+    "building": " Zuri's quiz placed the user at the Building level: add depth and challenge their risk planning.",
+    "advancing": " Zuri's quiz placed the user at the Advancing level: be concise and focus on trade-offs and discipline.",
+}
+
+
+def get_zuri_journey(user_id: str, authorization: str):
+    """The user's onboarding journey, or None when unavailable (e.g. migration not applied)."""
+    try:
+        response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/zuri_journey",
+            params={"select": "mode,level,phase", "user_id": f"eq.{user_id}"},
+            headers={"apikey": SUPABASE_ANON_KEY, "Authorization": authorization},
+            timeout=5,
+        )
+        rows = response.json() if response.status_code == 200 else None
+    except (requests.RequestException, ValueError):
+        return None
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+        return None
+    return rows[0]
+
+
+def _journey_prompt(journey: dict | None, linked_context: str) -> str:
+    prompt = ""
+    if journey:
+        prompt += LEVEL_STYLE.get(journey.get("level") or "", "")
+        if journey.get("mode") == "coach":
+            prompt += (
+                " The user chose Zuri as their training buddy: teach step by step, ask one short "
+                "check-in question when useful, and suggest the next step on their journey."
+            )
+        elif journey.get("mode") == "assistant":
+            prompt += " The user chose Zuri as an assistant: answer what is asked and avoid unrequested lessons."
+    if not linked_context:
+        prompt += (
+            " The user has not linked a broker yet. When relevant, guide them through opening a free "
+            "Alpaca paper account, generating API keys with trading permissions only, and linking them "
+            "in Settings → Broker, explaining that the broker is the licensed company that holds the "
+            "money, as when connecting MetaTrader 5 to a broker."
+        )
+    return prompt
+
+
 def _linked_account_context(user_id: str) -> str:
     """Read-only snapshot of the user's linked broker for the assistant; empty when unavailable."""
     try:
@@ -497,7 +545,9 @@ def chat_with_assistant(
             "do not claim exhaustive expertise or promise predictions."
         )
     system_prompt += EXPERIENCE_STYLE.get(experience or "", "")
-    system_prompt += _linked_account_context(user["id"])
+    journey = get_zuri_journey(user["id"], authorization)
+    system_prompt += _journey_prompt(journey, linked_context := _linked_account_context(user["id"]))
+    system_prompt += linked_context
     if request.context.news_article:
         article = request.context.news_article
         hostname = (urlparse(article.url).hostname or "").lower()
@@ -577,7 +627,18 @@ def close_all_positions(
         raise HTTPException(status_code=501, detail="Closing all positions is not supported for this broker yet.")
     if row["environment"] == "live" and confirmation_phrase != LIVE_CONFIRMATION_PHRASE:
         raise HTTPException(status_code=400, detail=f'Closing live positions requires typing "{LIVE_CONFIRMATION_PHRASE}".')
+    try:
+        held = adapter.positions()
+    except Exception:
+        held = []
     adapter.close_all()
+    for position in held:
+        symbol = str(position.get("symbol") or "").upper()
+        if not re.fullmatch(r"[A-Z0-9._/-]{1,20}", symbol):
+            continue
+        closing_side = "sell" if (position.get("side") or "long") == "long" else "buy"
+        _capture_trade(user["id"], "order_placed", symbol, closing_side, position.get("quantity"), row["broker"], row["environment"],
+                       {"action": "exit", "price": position.get("current_price"), "realized_pl": position.get("unrealized_pl")}, adapter=adapter)
     return {
         "status": "PANIC_SUCCESS",
         "message": "All pending orders cancelled and open positions liquidated.",
@@ -668,6 +729,8 @@ def parse_and_execute_trade(request: UserPrompt, user: dict = Depends(require_au
         shares = 1
 
     order = adapter.place_order(ticker, action.lower(), shares, stop_loss, take_profit)
+    _capture_trade(user["id"], "order_placed", ticker, action.lower(), shares, row["broker"], row["environment"],
+                   {"action": "entry", "price": current_price, "equity": equity, "stop_loss": stop_loss, "take_profit": take_profit}, adapter=adapter)
     return {
         "status": "executed",
         "environment": row["environment"],
@@ -741,6 +804,8 @@ class BrokerOrderRequest(BaseModel):
     symbol: str = Field(pattern=r"^[A-Za-z0-9_./-]{1,20}$")
     side: Literal["buy", "sell"]
     quantity: float = Field(gt=0, le=100000)
+    stop_loss: float | None = Field(default=None, gt=0)
+    take_profit: float | None = Field(default=None, gt=0)
     confirmed: bool = False
     confirmation_phrase: str | None = None
 
@@ -817,8 +882,488 @@ def place_broker_order(broker: str, request: BrokerOrderRequest, user: dict = De
         raise HTTPException(status_code=400, detail="Orders must be explicitly confirmed.")
     if row["environment"] == "live" and request.confirmation_phrase != LIVE_CONFIRMATION_PHRASE:
         raise HTTPException(status_code=400, detail=f'Live orders require typing "{LIVE_CONFIRMATION_PHRASE}".')
-    result = adapter.place_order(request.symbol.upper(), request.side, request.quantity)
+    symbol = request.symbol.upper()
+    context = _pre_trade_context(adapter, symbol, request.side)
+    stop_loss = take_profit = None
+    if context.get("action") == "entry" and (request.stop_loss or request.take_profit):
+        price = context.get("price")
+        if not price or not sizing.levels_valid(request.side, price, request.stop_loss, request.take_profit):
+            raise HTTPException(status_code=400, detail="Stop loss and take profit must both be set on the correct sides of the current price.")
+        stop_loss, take_profit = request.stop_loss, request.take_profit
+        context["stop_loss"], context["take_profit"] = stop_loss, take_profit
+    result = adapter.place_order(symbol, request.side, request.quantity, stop_loss, take_profit)
     logger.info("User %s placed %s %s order on %s (%s).", user["id"], request.side, request.symbol, broker, row["environment"])
+    _capture_trade(user["id"], "order_placed", symbol, request.side, request.quantity, broker, row["environment"], context, adapter=adapter)
     return {"environment": row["environment"], **result}
+
+
+TRADE_EMOTES = {"👋", "🤔", "💡", "📈", "📉", "⚖️", "🛡️", "✅", "⚠️", "🎯", "🧐", "💪"}
+
+
+class TradeConverseRequest(BaseModel):
+    messages: list[AssistantMessage] = Field(min_length=1, max_length=14)
+    symbol: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_./-]{1,20}$")
+    risk_percent: float = Field(default=1.0, gt=0, le=100)
+
+
+def _build_trade_plan(adapter, broker: str, symbol: str, side: str, risk_percent: float, equity: float, buying_power: float | None, currency: str | None, stop: float | None, target: float | None) -> dict:
+    price = adapter.price(symbol)
+    try:
+        avg_range = sizing.average_range(adapter.candles(symbol))
+    except Exception:
+        avg_range = None
+    levels_source = "zuri"
+    if sizing.levels_valid(side, price, stop, target):
+        levels_source = "proposed"
+    else:
+        stop, target = sizing.suggest_levels(side, price, avg_range)
+    forex = broker == "oanda"
+    risk = min(risk_percent, MAX_RISK_PERCENTAGE_CAP)
+    sized = sizing.size_position(
+        equity=equity, price=price, stop=stop, risk_percent=risk,
+        max_notional=None if forex else buying_power, forex=forex,
+    )
+    warnings = list(sized.get("warnings", []))
+    if risk < risk_percent:
+        warnings.append(f"Risk was capped at {MAX_RISK_PERCENTAGE_CAP}% of your account.")
+    if forex and currency and not symbol.upper().endswith(f"_{currency.upper()}"):
+        warnings.append("This pair is not quoted in your account currency, so the risk amount is approximate.")
+    stops_supported = broker != "tradier"
+    if not stops_supported:
+        warnings.append("Your broker connection cannot attach a stop automatically yet. Set it manually with your broker.")
+    reward = abs(target - price)
+    return {
+        **sized,
+        "warnings": warnings,
+        "symbol": symbol,
+        "side": side,
+        "price": price,
+        "stop_loss": stop,
+        "take_profit": target,
+        "risk_percent": risk,
+        "reward_to_risk": round(reward / abs(price - stop), 2) if price != stop else None,
+        "levels_source": levels_source,
+        "stops_supported": stops_supported,
+    }
+
+
+@app.post("/api/trade/converse")
+def converse_about_trade(request: TradeConverseRequest, user: dict = Depends(require_authenticated_user), authorization: str | None = Header(default=None)):
+    """Zuri talks a trade idea through. She proposes direction and levels; the server does all maths. Never places orders."""
+    if request.messages[-1].role != "user":
+        raise HTTPException(status_code=400, detail="The final message must be from the user.")
+    if authorization is None:
+        raise HTTPException(status_code=401, detail="Sign in to use this endpoint.")
+    row, adapter = _active_connection(user["id"])
+    markets, experience = get_user_profile_traits(user["id"], authorization)
+    journey = get_zuri_journey(user["id"], authorization)
+    account = adapter.account()
+    equity = account.get("equity") or 0
+    facts: dict = {"equity": equity, "currency": account.get("currency"), "buying_power": account.get("buying_power"), "environment": row["environment"]}
+    symbol = request.symbol.upper() if request.symbol else None
+    if symbol:
+        try:
+            facts["symbol"] = symbol
+            facts["price"] = adapter.price(symbol)
+            facts["avg_candle_range_15m"] = sizing.average_range(adapter.candles(symbol))
+        except Exception as e:
+            logger.info("Trade chat market facts unavailable for %s: %s", symbol, e)
+    try:
+        facts["open_positions"] = [f"{p['symbol']} {p.get('side')} x{p.get('quantity')}" for p in adapter.positions()[:8]]
+    except Exception:
+        pass
+
+    system_prompt = (
+        "You are Zuri, talking a trade idea through with the user before they trade, like a calm mentor brainstorming at a desk. "
+        "Ask short questions about their reasoning, what would prove them wrong, and their time horizon. Keep replies to 2-4 sentences, plain language. "
+        "You do ALL calculations and tedious work for them, but never state position sizes, lot sizes, prices you were not given, or dollar risk yourself: "
+        "the app computes those exactly from the proposal you return and shows them. "
+        "Never place trades and never claim to. Never promise outcomes or call any trade a sure thing. "
+        'Return JSON only: {"reply": "your message", "emote": one of 👋 🤔 💡 📈 📉 ⚖️ 🛡️ ✅ ⚠️ 🎯 🧐 💪, '
+        '"proposal": null or {"symbol": "TICKER", "side": "buy" or "sell", "stop_loss": number or null, "take_profit": number or null}}. '
+        "Only include a proposal once the user has a clear direction and symbol after some discussion, and tell them you have prepared the numbers for them to review. "
+        "Leave stop_loss and take_profit null unless the user gave levels; the app will suggest sensible ones. "
+        f"Live facts (real, from their broker): {json.dumps(facts)}. "
+        "Prices in the Zuri charts are simulated; use only the facts above."
+    )
+    if markets:
+        system_prompt += f" The user is interested in: {', '.join(markets)}."
+    system_prompt += EXPERIENCE_STYLE.get(experience or "", "") + _journey_prompt(journey, " linked")
+    messages = [{"role": "system", "content": system_prompt}] + [{"role": m.role, "content": m.content} for m in request.messages]
+    try:
+        response = get_groq_client().chat.completions.create(
+            messages=messages, model="openai/gpt-oss-20b", response_format={"type": "json_object"}, temperature=0.4, max_tokens=700,
+        )
+        parsed = json.loads(response.choices[0].message.content)
+        reply = str(parsed.get("reply") or "").strip()
+        if not reply:
+            raise ValueError("empty reply")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Zuri could not respond: {e}")
+    emote = parsed.get("emote") if parsed.get("emote") in TRADE_EMOTES else "💡"
+
+    plan = None
+    proposal = parsed.get("proposal")
+    if isinstance(proposal, dict):
+        p_symbol = str(proposal.get("symbol") or symbol or "").upper()
+        p_side = str(proposal.get("side") or "").lower()
+        num = lambda v: float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        if re.fullmatch(r"[A-Z0-9_./-]{1,20}", p_symbol) and p_side in {"buy", "sell"} and equity:
+            try:
+                plan = _build_trade_plan(adapter, row["broker"], p_symbol, p_side, request.risk_percent, float(equity), account.get("buying_power"), account.get("currency"), num(proposal.get("stop_loss")), num(proposal.get("take_profit")))
+            except HTTPException:
+                reply += f" I could not get a live price for {p_symbol}, so I cannot size it yet."
+            except Exception as e:
+                logger.info("Trade plan failed: %s", e)
+    return {"reply": reply, "emote": emote, "plan": plan, "broker": row["broker"], "environment": row["environment"]}
+
+
+def _service_request(table: str, method: str, params: dict | None = None, **kwargs):
+    try:
+        response = requests.request(
+            method,
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            params=params or {},
+            headers={**_service_headers(), "Prefer": "return=representation"},
+            timeout=8,
+            **kwargs,
+        )
+    except requests.RequestException as e:
+        logger.error("Storage request to %s failed: %s", table, e)
+        raise HTTPException(status_code=503, detail="Unable to reach journal storage.") from e
+    if response.status_code >= 400:
+        logger.error("Storage request to %s returned HTTP %s.", table, response.status_code)
+        raise HTTPException(status_code=503, detail="Journal storage failed. Apply the latest Supabase migration.")
+    return response.json() if response.content else []
+
+
+def _pre_trade_context(adapter, symbol: str, side: str) -> dict:
+    """Snapshot taken before the order so the journal can tell entries from exits and size the trade."""
+    context: dict = {"action": "entry"}
+    try:
+        context["equity"] = adapter.account().get("equity")
+        price = adapter.price(symbol)
+        context["price"] = price
+        held = next((p for p in adapter.positions() if str(p["symbol"]).upper() == symbol), None)
+        if held and held.get("quantity"):
+            held_long = (held.get("side") or "long") == "long"
+            if (side == "sell") == held_long:
+                context["action"] = "exit"
+                avg = held.get("avg_entry_price")
+                if avg and price:
+                    direction = 1 if held_long else -1
+                    context["avg_entry_price"] = avg
+                    context["pl_per_unit"] = direction * (price - avg)
+    except Exception as e:
+        logger.info("Pre-trade journal context unavailable: %s", e)
+    return context
+
+
+def _capture_trade(user_id: str, kind: str, symbol: str, side: str, quantity: float | None, broker: str, environment: str, context: dict, adapter=None):
+    """Automatically records the trade and a draft journal entry. Never blocks or fails the order."""
+    try:
+        price = context.get("price")
+        details = {
+            "side": side, "quantity": quantity, "price": price, "broker": broker, "environment": environment,
+            "action": context.get("action", "entry"), "equity": context.get("equity"),
+            "notional": round(quantity * price, 2) if quantity and price else None,
+            "stop_loss": context.get("stop_loss"),
+        }
+        if details["action"] == "exit" and context.get("pl_per_unit") is not None and quantity:
+            details["realized_pl"] = round(context["pl_per_unit"] * quantity, 2)
+        if details["action"] == "exit" and context.get("realized_pl") is not None:
+            details["realized_pl"] = round(context["realized_pl"], 2)
+        _service_request("journey_events", "POST", json={"user_id": user_id, "kind": kind, "symbol": symbol, "details": details})
+
+        is_exit = details["action"] == "exit"
+        long_side = (side == "buy") != is_exit
+        label = "exit" if is_exit else "entry"
+        note = f"Auto-captured {label}: {side} {quantity} {symbol}" + (f" at about {price}" if price else "") + f" on {broker} ({environment})."
+        if details.get("realized_pl") is not None:
+            note += f" Estimated result: {details['realized_pl']}."
+        note += " A chart snapshot is being annotated. No reason was written yet. Ask Zuri to help you fill it in."
+        created = _service_request("journal_entries", "POST", json={
+            "user_id": user_id, "symbol": symbol, "timeframe": "15m", "side": "Long" if long_side else "Short",
+            "setup": f"Auto-captured {label}", "entry_price": price if price and not is_exit else None, "stop_price": context.get("stop_loss") or None,
+            "note": note, "source": "auto",
+        })
+        if adapter is not None:
+            snapshot_kind = "detected" if kind == "position_detected" else ("exit" if is_exit else "entry")
+            markers = {
+                "price": price, "side": side, "kind": snapshot_kind, "stop_loss": context.get("stop_loss"),
+                "take_profit": context.get("take_profit"), "realized_pl": details.get("realized_pl"),
+            }
+            entry_id = created[0]["id"] if isinstance(created, list) and created else None
+            # Fetching candles and annotating with the AI is slow, so it never holds up the order response.
+            threading.Thread(target=_snapshot_worker, args=(user_id, adapter, symbol, snapshot_kind, side, markers, entry_id), daemon=True).start()
+    except Exception as e:
+        logger.warning("Automatic journal capture failed: %s", e)
+
+
+def _annotate_candles(symbol: str, kind: str, markers: dict, candles: list[dict]):
+    lows, highs = [c["l"] for c in candles], [c["h"] for c in candles]
+    low, high = min(lows), max(highs)
+    facts = {k: v for k, v in markers.items() if k in {"side", "price", "stop_loss", "take_profit", "realized_pl"} and v is not None}
+    prompt = (
+        "You are Zuri, annotating a 15-minute chart snapshot for a trader to study later. "
+        f"Candle rows are [index, open, high, low, close]; index 0 is oldest and the last index is the moment of the {kind}. "
+        f"Trade facts: {json.dumps(facts)}. "
+        'Return JSON only: {"analysis": "2-3 sentences", "annotations": [{"kind": "support|resistance|entry|exit|risk|note", '
+        '"index": integer candle index or null, "price": number or null, "text": "max 100 characters"}]}. '
+        "Give 3 to 6 annotations. Mark only what is visible in the data: swing highs and lows, support and resistance, "
+        "the entry or exit itself, and whether the stop placement (or its absence) fits the recent average candle range. "
+        "Say what a student should study. Do not predict the future, invent news, or give buy/sell advice.\n"
+        f"CANDLES: {json.dumps(journal_analytics.compact_candles(candles))}"
+    )
+    response = get_groq_client().chat.completions.create(
+        messages=[{"role": "system", "content": prompt}, {"role": "user", "content": f"Annotate this {symbol} {kind} snapshot."}],
+        model="openai/gpt-oss-20b", response_format={"type": "json_object"}, temperature=0.2, max_tokens=800,
+    )
+    parsed = json.loads(response.choices[0].message.content)
+    annotations = journal_analytics.sanitize_annotations(parsed.get("annotations"), len(candles), low, high)
+    return annotations, str(parsed.get("analysis") or "").strip()[:700]
+
+
+def _snapshot_worker(user_id: str, adapter, symbol: str, kind: str, side: str, markers: dict, entry_id: str | None):
+    try:
+        candles = [c for c in adapter.candles(symbol) if c.get("t") and all(isinstance(c.get(k), (int, float)) for k in "ohlc")]
+        if len(candles) < 10:
+            return
+        markers = {**markers, "time": candles[-1]["t"], "price": markers.get("price") or candles[-1]["c"]}
+        rows = _service_request("trade_snapshots", "POST", json={
+            "user_id": user_id, "symbol": symbol, "kind": kind, "side": side, "candles": candles,
+            "markers": markers, "journal_entry_id": entry_id,
+        })
+        try:
+            annotations, analysis = _annotate_candles(symbol, kind, markers, candles)
+            _service_request("trade_snapshots", "PATCH", {"id": f"eq.{rows[0]['id']}", "user_id": f"eq.{user_id}"},
+                             json={"annotations": annotations, "analysis": analysis})
+        except Exception as e:
+            logger.info("Snapshot annotation failed; it can be retried from the app: %s", e)
+    except Exception as e:
+        logger.info("Chart snapshot unavailable for %s: %s", symbol, e)
+
+
+@app.get("/api/history")
+def trade_history(broker: str | None = Query(default=None), user: dict = Depends(require_authenticated_user)):
+    row, adapter = _active_connection(user["id"], broker)
+    if not hasattr(adapter, "history"):
+        raise HTTPException(status_code=501, detail="Trade history is not supported for this broker yet.")
+    data = adapter.history()
+    trips = data.get("round_trips")
+    if trips is None:
+        trips = journal_analytics.pair_fills(data["fills"])
+    return {"broker": row["broker"], "environment": row["environment"], "fills": data["fills"], "round_trips": trips}
+
+
+@app.get("/api/snapshots")
+def list_snapshots(limit: int = Query(default=30, ge=1, le=100), user: dict = Depends(require_authenticated_user)):
+    cols = "id,symbol,kind,side,timeframe,candles,markers,annotations,analysis,journal_entry_id,created_at"
+    rows = _service_request("trade_snapshots", "GET", {"select": cols, "user_id": f"eq.{user['id']}", "order": "created_at.desc", "limit": str(limit)})
+    with_shots = {r["id"] for r in _service_request("trade_snapshots", "GET", {"select": "id", "user_id": f"eq.{user['id']}", "screenshot": "not.is.null", "limit": "200"})}
+    for row in rows:
+        row["has_screenshot"] = row["id"] in with_shots
+    return {"snapshots": rows}
+
+
+@app.get("/api/snapshots/{snapshot_id}/screenshot")
+def get_snapshot_screenshot(snapshot_id: str, user: dict = Depends(require_authenticated_user)):
+    snapshot = _own_snapshot(snapshot_id, user["id"])
+    if not snapshot.get("screenshot"):
+        raise HTTPException(status_code=404, detail="No screen capture saved for this snapshot.")
+    return {"image": snapshot["screenshot"]}
+
+
+def _own_snapshot(snapshot_id: str, user_id: str):
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", snapshot_id):
+        raise HTTPException(status_code=400, detail="Invalid snapshot id.")
+    rows = _service_request("trade_snapshots", "GET", {"select": "*", "id": f"eq.{snapshot_id}", "user_id": f"eq.{user_id}"})
+    if not rows:
+        raise HTTPException(status_code=404, detail="Snapshot not found.")
+    return rows[0]
+
+
+@app.post("/api/snapshots/{snapshot_id}/annotate")
+def reannotate_snapshot(snapshot_id: str, user: dict = Depends(require_authenticated_user)):
+    snapshot = _own_snapshot(snapshot_id, user["id"])
+    try:
+        annotations, analysis = _annotate_candles(snapshot["symbol"], snapshot["kind"], snapshot["markers"], snapshot["candles"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Zuri could not annotate this chart: {e}")
+    _service_request("trade_snapshots", "PATCH", {"id": f"eq.{snapshot_id}", "user_id": f"eq.{user['id']}"}, json={"annotations": annotations, "analysis": analysis})
+    return {"annotations": annotations, "analysis": analysis}
+
+
+class ScreenshotRequest(BaseModel):
+    image: str = Field(min_length=100, max_length=2_400_000)
+
+
+@app.post("/api/snapshots/{snapshot_id}/screenshot")
+def attach_snapshot_screenshot(snapshot_id: str, request: ScreenshotRequest, user: dict = Depends(require_authenticated_user)):
+    _own_snapshot(snapshot_id, user["id"])
+    if not re.fullmatch(r"data:image/jpeg;base64,[A-Za-z0-9+/=]+", request.image):
+        raise HTTPException(status_code=400, detail="Screenshot must be a base64 JPEG.")
+    _service_request("trade_snapshots", "PATCH", {"id": f"eq.{snapshot_id}", "user_id": f"eq.{user['id']}"}, json={"screenshot": request.image})
+    return {"status": "saved"}
+
+
+@app.delete("/api/snapshots/{snapshot_id}")
+def delete_snapshot(snapshot_id: str, user: dict = Depends(require_authenticated_user)):
+    _own_snapshot(snapshot_id, user["id"])
+    _service_request("trade_snapshots", "DELETE", {"id": f"eq.{snapshot_id}", "user_id": f"eq.{user['id']}"})
+    return {"status": "deleted"}
+
+
+class JourneyEventRequest(BaseModel):
+    kind: Literal["watchlist_add", "watchlist_remove", "symbol_viewed"]
+    symbol: str = Field(pattern=r"^[A-Za-z0-9._/-]{1,20}$")
+
+
+@app.post("/api/journal/events")
+def record_journey_event(request: JourneyEventRequest, user: dict = Depends(require_authenticated_user)):
+    symbol = request.symbol.upper()
+    if request.kind == "symbol_viewed":
+        since = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        recent = _service_request("journey_events", "GET", {
+            "select": "id", "user_id": f"eq.{user['id']}", "kind": "eq.symbol_viewed",
+            "symbol": f"eq.{symbol}", "created_at": f"gte.{since}", "limit": "1",
+        })
+        if recent:
+            return {"recorded": False}
+    _service_request("journey_events", "POST", json={"user_id": user["id"], "kind": request.kind, "symbol": symbol, "details": {}})
+    return {"recorded": True}
+
+
+def _load_journey_data(user_id: str):
+    events = _service_request("journey_events", "GET", {"select": "*", "user_id": f"eq.{user_id}", "order": "created_at.asc", "limit": "1000"})
+    entries = _service_request("journal_entries", "GET", {"select": "id,symbol,side,setup,stop_price,source,note,created_at", "user_id": f"eq.{user_id}", "order": "created_at.desc", "limit": "500"})
+    try:
+        _, adapter = _active_connection(user_id)
+        account, positions = adapter.account(), adapter.positions()
+        equity = account.get("equity")
+    except Exception:
+        adapter, positions, equity = None, [], None
+    return events, entries, positions, equity, adapter
+
+
+@app.post("/api/journal/sync")
+def sync_journal(user: dict = Depends(require_authenticated_user)):
+    """Captures positions opened outside Zuri so the journal still sees them."""
+    try:
+        row, adapter = _active_connection(user["id"])
+        positions = adapter.positions()
+    except HTTPException:
+        return {"created": 0}
+    except Exception as e:
+        logger.info("Journal sync skipped: %s", e)
+        return {"created": 0}
+    known = {e["symbol"] for e in _service_request("journey_events", "GET", {
+        "select": "symbol", "user_id": f"eq.{user['id']}", "kind": "in.(order_placed,position_detected)"})}
+    created = 0
+    for position in positions:
+        symbol = str(position["symbol"]).upper()
+        if symbol in known or not re.fullmatch(r"[A-Z0-9._/-]{1,20}", symbol):
+            continue
+        side = "buy" if (position.get("side") or "long") == "long" else "sell"
+        price = position.get("avg_entry_price")
+        _capture_trade(user["id"], "position_detected", symbol, side, position.get("quantity"), row["broker"], row["environment"],
+                       {"action": "entry", "price": price}, adapter=adapter)
+        created += 1
+    return {"created": created}
+
+
+@app.get("/api/journal/insights")
+def journal_insights(tz_offset_minutes: int = Query(default=0, ge=-840, le=840), user: dict = Depends(require_authenticated_user)):
+    events, entries, positions, equity, _ = _load_journey_data(user["id"])
+    return {
+        "stats": journal_analytics.compute_stats(events, entries, positions, equity, tz_offset_minutes),
+        "timeline": journal_analytics.timeline(events, 30),
+    }
+
+
+class JournalAnalyzeRequest(BaseModel):
+    tz_offset_minutes: int = Field(default=0, ge=-840, le=840)
+    question: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/api/journal/analyze")
+def analyze_journal(request: JournalAnalyzeRequest, user: dict = Depends(require_authenticated_user), authorization: str | None = Header(default=None)):
+    events, entries, positions, equity, _ = _load_journey_data(user["id"])
+    stats = journal_analytics.compute_stats(events, entries, positions, equity, request.tz_offset_minutes)
+    if not events:
+        return {"report": "I don't have any activity to analyse yet. Add symbols to your watchlist, open charts and place a trade. I'll track it all automatically.", "stats": stats}
+    traits = get_zuri_journey(user["id"], authorization) if authorization else None
+    manual_notes = [
+        {"symbol": e["symbol"], "side": e["side"], "setup": e["setup"], "note": e["note"][:300], "at": e["created_at"]}
+        for e in entries if e.get("source") == "manual"
+    ][:20]
+    system_prompt = (
+        "You are Zuri, a trading-journal analyst. Analyse the user's recorded trading journey "
+        "from first interest in a symbol through every trade. Use ONLY the figures supplied below; "
+        "never invent numbers, prices or outcomes. If a statistic is null or the sample is small "
+        "(under about 10 trades), say so plainly and treat patterns as tentative. Output markdown "
+        "with these sections: **Leaks** (each leak with the exact evidence figure and a concrete fix), "
+        "**What's working**, **Strategy read** (what approach their behaviour implies and whether it is "
+        "consistent), and **Your next experiment** (one measurable action). Be specific and direct. "
+        "Do not give personalised financial advice or tell them what to buy or sell. Realized P&L is an "
+        "estimate from the price at the time of the exit order. "
+        f"Hours are in the user's local time.\n\nSTATS:\n{json.dumps(stats)}\n\n"
+        f"TIMELINE (oldest to newest):\n{json.dumps(journal_analytics.timeline(events, 60))}\n\n"
+        f"USER-WRITTEN NOTES:\n{json.dumps(manual_notes)}"
+    )
+    system_prompt += LEVEL_STYLE.get((traits or {}).get("level") or "", "")
+    user_message = request.question or "Analyse my journey and find my biggest leaks."
+    try:
+        response = get_groq_client().chat.completions.create(
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}],
+            model="openai/gpt-oss-20b", temperature=0.2, max_tokens=1400,
+        )
+        report = (response.choices[0].message.content or "").strip()
+        if not report:
+            raise ValueError("The AI returned an empty response.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Zuri analysis failed: {e}")
+    return {"report": report, "stats": stats}
+
+
+class JournalNoteRequest(BaseModel):
+    prompt: str | None = Field(default=None, max_length=600)
+
+
+@app.post("/api/journal/entries/{entry_id}/ai-note")
+def draft_journal_note(entry_id: str, request: JournalNoteRequest, user: dict = Depends(require_authenticated_user)):
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", entry_id):
+        raise HTTPException(status_code=400, detail="Invalid entry id.")
+    rows = _service_request("journal_entries", "GET", {"select": "*", "id": f"eq.{entry_id}", "user_id": f"eq.{user['id']}"})
+    if not rows:
+        raise HTTPException(status_code=404, detail="Journal entry not found.")
+    entry = rows[0]
+    events = _service_request("journey_events", "GET", {"select": "*", "user_id": f"eq.{user['id']}", "symbol": f"eq.{entry['symbol']}", "order": "created_at.asc", "limit": "40"})
+    prompt = (
+        "You are Zuri. Write a short, factual journal note (3 to 5 sentences, first person, as the trader) "
+        "for this entry using only the data given: how interest in the symbol began, what the trade was, "
+        "and the plan or risk gaps visible (e.g. no stop-loss recorded). End with ONE reflective question "
+        "the trader should answer to complete the note. Do not invent reasons, prices or outcomes. "
+        f"ENTRY: {json.dumps({k: entry.get(k) for k in ('symbol', 'side', 'setup', 'entry_price', 'stop_price', 'target_price', 'note', 'created_at')})}\n"
+        f"SYMBOL TIMELINE: {json.dumps(journal_analytics.timeline(events, 40))}"
+    )
+    try:
+        response = get_groq_client().chat.completions.create(
+            messages=[{"role": "system", "content": prompt}, {"role": "user", "content": request.prompt or "Draft the note."}],
+            model="openai/gpt-oss-20b", temperature=0.3, max_tokens=400,
+        )
+        note = (response.choices[0].message.content or "").strip()
+        if not note:
+            raise ValueError("The AI returned an empty response.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Zuri note drafting failed: {e}")
+    _service_request("journal_entries", "PATCH", {"id": f"eq.{entry_id}", "user_id": f"eq.{user['id']}"}, json={"note": note[:4000]})
+    return {"note": note}
 
 

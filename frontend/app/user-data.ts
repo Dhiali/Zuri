@@ -12,6 +12,7 @@ export type JournalEntry = {
   stop: string;
   target: string;
   note: string;
+  source: "manual" | "auto";
   createdAt: string;
 };
 
@@ -104,6 +105,7 @@ function toJournalEntry(row: Record<string, unknown>): JournalEntry {
     stop: row.stop_price == null ? "" : String(row.stop_price),
     target: row.target_price == null ? "" : String(row.target_price),
     note: String(row.note ?? ""),
+    source: row.source === "auto" ? "auto" : "manual",
     createdAt: String(row.created_at),
   };
 }
@@ -133,6 +135,42 @@ export async function saveUserProfile(profile: Pick<UserProfile, "id" | "display
     .from("profiles")
     .upsert(profile, { onConflict: "id" });
   if (error) throw new Error(`Unable to save your profile: ${error.message}`);
+}
+
+export type ZuriPhase = "intro" | "tour" | "mode" | "quiz" | "done";
+export type ZuriMode = "coach" | "assistant";
+export type ZuriLevel = "foundations" | "building" | "advancing";
+
+export type ZuriJourney = {
+  user_id: string;
+  phase: ZuriPhase;
+  mode: ZuriMode | null;
+  level: ZuriLevel | null;
+  quiz_score: number | null;
+  completed_steps: string[];
+};
+
+export async function loadZuriJourney(userId: string) {
+  const supabase = requireSupabase();
+  const { data, error } = await supabase
+    .from("zuri_journey")
+    .select("user_id, phase, mode, level, quiz_score, completed_steps")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(`Unable to load your Zuri journey: ${error.message}`);
+  if (data) return data as ZuriJourney;
+
+  const fresh: ZuriJourney = { user_id: userId, phase: "intro", mode: null, level: null, quiz_score: null, completed_steps: [] };
+  const { error: insertError } = await supabase.from("zuri_journey").insert(fresh);
+  if (insertError) throw new Error(`Unable to start your Zuri journey: ${insertError.message}`);
+  return fresh;
+}
+
+export async function saveZuriJourney(journey: ZuriJourney) {
+  const { error } = await requireSupabase()
+    .from("zuri_journey")
+    .upsert({ ...journey, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+  if (error) throw new Error(`Unable to save your Zuri journey: ${error.message}`);
 }
 
 export async function loadUserPreferences(userId: string) {
@@ -220,7 +258,7 @@ async function migrateLegacyJournal(userId: string) {
   window.localStorage.setItem(journalMigrationKey(userId), "true");
 }
 
-export async function addJournalEntry(userId: string, entry: Omit<JournalEntry, "id" | "createdAt">) {
+export async function addJournalEntry(userId: string, entry: Omit<JournalEntry, "id" | "createdAt" | "source">) {
   const { data, error } = await requireSupabase()
     .from("journal_entries")
     .insert({

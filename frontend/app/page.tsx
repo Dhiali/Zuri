@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useZuriAuth, ZuriAuthGate } from "./auth";
 import { BrokerConnections } from "./broker-connections";
+import { HistoryView } from "./history-view";
+import { TradeConversation } from "./trade-conversation";
+import { SnapshotGallery, captureScreenForTrade } from "./trade-snapshots";
 import { backendUrl, formatMoney, useLinkedAccount, type LinkedAccountState, type LinkedPosition } from "./linked-account";
 import {
   addJournalEntry,
@@ -12,14 +15,19 @@ import {
   loadUserProfile,
   loadUserPreferences,
   loadWatchlist,
+  loadZuriJourney,
   saveUserProfile,
   saveUserPreferences,
   saveWatchlist,
+  saveZuriJourney,
   type JournalEntry,
   type JournalSide,
   type UserProfile,
   type UserPreferences,
+  type ZuriJourney,
 } from "./user-data";
+import { JourneyChecklist, ZuriJourneyOverlay } from "./zuri-journey";
+import { draftJournalNote, JournalInsights, trackJourneyEvent } from "./journal-insights";
 
 type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
 type SettingsTab = "Account" | "Broker" | "Trading" | "Risk" | "Platform" | "Display" | "Notifications" | "Security";
@@ -151,10 +159,45 @@ function TradingWorkspace() {
   const [assistantNewsRequest, setAssistantNewsRequest] = useState<{ article: MarketNewsArticle } | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantDraft, setAssistantDraft] = useState("");
+  const [journey, setJourney] = useState<ZuriJourney | null>(null);
+  const userId = session?.user.id;
+  const accessToken = session?.access_token ?? "";
+  const [journalRefresh, setJournalRefresh] = useState(0);
+
+  const reloadJournal = useCallback(() => {
+    if (!userId) return;
+    void loadJournalEntries(userId).then((entries) => {
+      setJournalEntries(entries);
+      setJournalRefresh((value) => value + 1);
+    }).catch(() => undefined);
+  }, [userId]);
+
+  // A missing table or load failure must never block the workspace.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    void loadZuriJourney(userId).then((loaded) => {
+      if (!cancelled) setJourney(loaded);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  const updateJourney = (next: ZuriJourney) => {
+    setJourney(next);
+    saveZuriJourney(next).catch((saveError: unknown) => {
+      setDataError(saveError instanceof Error ? saveError.message : "Unable to save your Zuri journey.");
+    });
+  };
   const marketNewsLoaded = useRef(false);
   const activeSymbol = watchlistSymbols.includes(selectedSymbol) ? selectedSymbol : watchlistInstruments[0]?.symbol ?? initialInstruments[0].symbol;
   const symbol = instruments.find((instrument) => instrument.symbol === activeSymbol) ?? initialInstruments.find((instrument) => instrument.symbol === activeSymbol) ?? initialInstruments[0];
   const aiBias = symbol.up ? "UPWARD BIAS" : "DOWNWARD BIAS";
+
+  useEffect(() => {
+    if (section === "Charts" && workspaceDataUserId === userId) trackJourneyEvent(accessToken, "symbol_viewed", activeSymbol);
+  }, [section, activeSymbol, accessToken, userId, workspaceDataUserId]);
   const aiBrief = `The simulated ${symbol.symbol} quote is ${symbol.change} today. Treat this as a watch cue, then verify price action and risk before placing a paper order.`;
   const searchUniverse = query.trim() ? instruments : watchlistInstruments;
   const filteredInstruments = searchUniverse.filter((item) => `${item.symbol} ${item.name}`.toLowerCase().includes(query.toLowerCase()));
@@ -262,7 +305,7 @@ function TradingWorkspace() {
     setAssistantOpen(true);
   };
 
-  const saveJournalEntry = async (entry: Omit<JournalEntry, "id" | "createdAt">) => {
+  const saveJournalEntry = async (entry: Omit<JournalEntry, "id" | "createdAt" | "source">) => {
     if (!session?.user.id) return;
     try {
       const savedEntry = await addJournalEntry(session.user.id, entry);
@@ -298,6 +341,7 @@ function TradingWorkspace() {
   };
 
   const removeInstrument = (symbolToRemove: string) => {
+    trackJourneyEvent(session?.access_token ?? "", "watchlist_remove", symbolToRemove);
     const remainingSymbols = watchlistSymbols.filter((item) => item !== symbolToRemove);
     void updateWatchlist(remainingSymbols);
     const remaining = watchlistInstruments.filter((instrument) => instrument.symbol !== symbolToRemove);
@@ -306,6 +350,7 @@ function TradingWorkspace() {
 
   const addInstrument = (symbolToAdd: string) => {
     if (watchlistSymbols.includes(symbolToAdd)) return;
+    trackJourneyEvent(session?.access_token ?? "", "watchlist_add", symbolToAdd);
     void updateWatchlist([...watchlistSymbols, symbolToAdd]);
     setSelectedSymbol(symbolToAdd);
     setSection("Charts");
@@ -361,11 +406,21 @@ function TradingWorkspace() {
               }}
               onAskAboutStory={askZuriAboutNews}
               linked={linkedAccount}
+              checklist={journey?.phase === "done" ? (
+                <JourneyChecklist
+                  journey={journey}
+                  brokerLinked={linkedAccount.status === "ready"}
+                  hasPositions={(linkedAccount.data?.positions.length ?? 0) > 0}
+                  journalCount={journalEntries.length}
+                  onChange={updateJourney}
+                  setSection={setSection}
+                />
+              ) : null}
             />
           )}
-          {section === "Trade" && <TradeView symbol={symbol} orderSide={orderSide} setOrderSide={setOrderSide} linked={linkedAccount} token={session?.access_token ?? ""}/>}
-          {section === "History" && <HistoryView/>}
-          {section === "Journal" && <JournalView entries={journalEntries} onNewEntry={() => { setSection("Charts"); setJournalDraftSide("Watching"); setJournalDraftOpen(true); }} onDelete={(id) => void removeJournalEntry(id)} />}
+          {section === "Trade" && <TradeView symbol={symbol} orderSide={orderSide} setOrderSide={setOrderSide} linked={linkedAccount} token={session?.access_token ?? ""} onTraded={reloadJournal} riskPercent={userPreferences?.max_trade_risk_percent ?? 1}/>}
+          {section === "History" && <HistoryView linked={linkedAccount} token={accessToken} refreshKey={journalRefresh} />}
+          {section === "Journal" && <JournalView entries={journalEntries} token={accessToken} refreshKey={journalRefresh} onReload={reloadJournal} onNewEntry={() => { setSection("Charts"); setJournalDraftSide("Watching"); setJournalDraftOpen(true); }} onDelete={(id) => void removeJournalEntry(id)} />}
           {section === "Settings" && session && <SettingsView linked={linkedAccount} userId={session.user.id} email={session.user.email ?? ""} preferences={userPreferences} onSavePreferences={async (preferences) => {
             await saveUserPreferences(preferences);
             setUserPreferences(preferences);
@@ -447,6 +502,9 @@ function TradingWorkspace() {
         </aside>}
       </div>
       <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>{linkedAccount.data ? (linkedAccount.data.environment === "live" ? "Live trading" : "Paper trading") : "Trading"} <b>{linkedAccount.data ? "ON" : "OFF"}</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
+      {journey && journey.phase !== "done" && (
+        <ZuriJourneyOverlay journey={journey} experience={session?.user.user_metadata?.trading_experience as string | undefined} onChange={updateJourney} setSection={setSection} />
+      )}
       <AuraAssistant
         section={section}
         symbol={symbol}
@@ -647,7 +705,7 @@ function AuraAssistant({
   );
 }
 
-function JournalCapture({ symbol, timeframe, initialSide, onSave, onCancel }: { symbol: Instrument; timeframe: string; initialSide: JournalSide; onSave: (entry: Omit<JournalEntry, "id" | "createdAt">) => void | Promise<void>; onCancel: () => void }) {
+function JournalCapture({ symbol, timeframe, initialSide, onSave, onCancel }: { symbol: Instrument; timeframe: string; initialSide: JournalSide; onSave: (entry: Omit<JournalEntry, "id" | "createdAt" | "source">) => void | Promise<void>; onCancel: () => void }) {
   return (
     <section className="journal-capture" aria-labelledby="journal-capture-title">
       <div className="journal-capture-heading"><div><span className="small-label">CHART JOURNAL · {symbol.symbol} · {timeframe}</span><h2 id="journal-capture-title">Capture your plan</h2></div><button className="icon-action" title="Close journal capture" onClick={onCancel}>×</button></div>
@@ -670,13 +728,31 @@ function JournalCapture({ symbol, timeframe, initialSide, onSave, onCancel }: { 
   );
 }
 
-function JournalView({ entries, onNewEntry, onDelete }: { entries: JournalEntry[]; onNewEntry: () => void; onDelete: (id: string) => void }) {
+function JournalView({ entries, token, refreshKey, onReload, onNewEntry, onDelete }: { entries: JournalEntry[]; token: string; refreshKey: number; onReload: () => void; onNewEntry: () => void; onDelete: (id: string) => void }) {
+  const [draftingId, setDraftingId] = useState("");
+  const [draftError, setDraftError] = useState("");
+  const draftNote = async (id: string) => {
+    setDraftingId(id);
+    setDraftError("");
+    try {
+      await draftJournalNote(token, id);
+      onReload();
+    } catch (error) {
+      setDraftError(error instanceof Error ? error.message : "Zuri could not draft this note.");
+    } finally {
+      setDraftingId("");
+    }
+  };
   return (
     <div className="secondary-view journal-view">
-      <div className="section-title journal-view-heading"><div><span className="small-label">CHART-LINKED NOTES · SAVED TO YOUR ACCOUNT</span><h2>Trading journal</h2></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
+      <div className="section-title journal-view-heading"><div><span className="small-label">AUTOMATIC JOURNEY TRACKING · SAVED TO YOUR ACCOUNT</span><h2>Trading journal</h2></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
+      <JournalInsights token={token} refreshKey={refreshKey} onEntriesChanged={onReload} />
+      {draftError && <p className="auth-message" role="alert">{draftError}</p>}
       {entries.length === 0 ? <div className="content-card journal-empty"><span className="small-label">NO ENTRIES YET</span><h3>Start with a chart idea</h3><p>Capture a setup, define your risk, and write down what would invalidate the trade.</p><button className="outline-button" onClick={onNewEntry}>Open chart and write a note</button></div> : <div className="journal-entry-list">{entries.map((entry) => <article className="content-card journal-entry" key={entry.id}>
         <div className="journal-entry-heading"><div><span className="small-label">{entry.setup} · {entry.timeframe}</span><h3>{entry.symbol} <span className={`side-pill ${entry.side === "Short" ? "short" : entry.side === "Long" ? "long" : "watching"}`}>{entry.side}</span></h3></div><div className="journal-entry-actions"><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time><button className="text-action" onClick={() => onDelete(entry.id)} aria-label={`Delete ${entry.symbol} journal entry`}>Delete</button></div></div>
         <p>{entry.note}</p>
+        {entry.source === "auto" && <div className="journal-auto-row"><span className="auto-pill">AUTO-CAPTURED</span><button className="outline-button" disabled={draftingId === entry.id} onClick={() => void draftNote(entry.id)}>{draftingId === entry.id ? "Zuri is writing…" : "Ask Zuri to write the note"}</button></div>}
+        {entry.source === "auto" && <SnapshotGallery token={token} refreshKey={refreshKey} entryId={entry.id} showControls={false} />}
         <div className="journal-plan-values"><span>Entry <b>{entry.entry || "—"}</b></span><span>Stop <b>{entry.stop || "—"}</b></span><span>Target <b>{entry.target || "—"}</b></span></div>
       </article>)}</div>}
     </div>
@@ -760,10 +836,12 @@ function Dashboard({
   onRefresh,
   onAskAboutStory,
   linked,
+  checklist,
 }: {
-  linked: LinkedAccountState;
+  checklist: React.ReactNode;
   setSection: (section: Section) => void;
   news: MarketNewsResponse | null;
+  linked: LinkedAccountState;
   loading: boolean;
   error: string;
   onRefresh: () => void;
@@ -775,6 +853,7 @@ function Dashboard({
         <div><span className="small-label">FRIDAY, OCTOBER 02, 2026</span><h2>Good afternoon, Jordan.</h2><p>Here’s the signal behind your numbers today.</p></div>
         <button className="solid-button" onClick={() => setSection("Trade")}>＋ <span>New order</span></button>
       </div>
+      {checklist}
       <MarketNewsSection variant="dashboard" news={news} loading={loading} error={error} onRefresh={onRefresh} onAskAboutStory={onAskAboutStory} />
       {linked.status !== "ready" ? (
         <section className="content-card">
@@ -804,7 +883,9 @@ function Dashboard({
   );
 }
 function Metric({ label, value, change }: { label: string; value: string; change: string }) { return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small className={change.startsWith("+") ? "positive" : "muted"}>{change}</small></div>; }
-function TradeView({ symbol, orderSide, setOrderSide, linked, token }: { symbol: Instrument; orderSide: "Buy" | "Sell"; setOrderSide: (side: "Buy" | "Sell") => void; linked: LinkedAccountState; token: string }) {
+function TradeView({ symbol, orderSide, setOrderSide, linked, token, onTraded, riskPercent }: { symbol: Instrument; orderSide: "Buy" | "Sell"; setOrderSide: (side: "Buy" | "Sell") => void; linked: LinkedAccountState; token: string; onTraded: () => void; riskPercent: number }) {
+  const [stopLoss, setStopLoss] = useState("");
+  const [takeProfit, setTakeProfit] = useState("");
   const [tradeSymbol, setTradeSymbol] = useState(symbol);
   const [orderSymbol, setOrderSymbol] = useState(symbol.symbol);
   const [quantity, setQuantity] = useState("1");
@@ -841,14 +922,17 @@ function TradeView({ symbol, orderSide, setOrderSide, linked, token }: { symbol:
       const response = await fetch(`${backendUrl}/api/brokers/${linked.data.broker}/orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ symbol: orderSymbol.trim(), side: orderSide.toLowerCase(), quantity: quantityValue, confirmed, confirmation_phrase: livePhrase }),
+        body: JSON.stringify({ symbol: orderSymbol.trim(), side: orderSide.toLowerCase(), quantity: quantityValue, confirmed, confirmation_phrase: livePhrase, ...(Number(stopLoss) > 0 && Number(takeProfit) > 0 ? { stop_loss: Number(stopLoss), take_profit: Number(takeProfit) } : {}) }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The order was rejected.");
       setOrderMessage(`${isLive ? "LIVE" : "Paper"} order sent: ${body.status ?? "submitted"}.`);
       setConfirmed(false);
       setLivePhrase("");
+      setStopLoss("");
+      setTakeProfit("");
       linked.refresh();
+      captureScreenForTrade(token, orderSymbol.trim(), onTraded);
     } catch (error) {
       setOrderError(error instanceof Error ? error.message : "The order failed.");
     } finally {
@@ -860,6 +944,18 @@ function TradeView({ symbol, orderSide, setOrderSide, linked, token }: { symbol:
     <div className="secondary-view trade-view">
       <div className="trade-intro"><div><span className="small-label">ORDER TICKET</span><h2>Place an order</h2><p>{linked.data ? `${linked.data.broker_name} ${isLive ? "live" : "paper"} account · ${accountCurrency}` : "No broker linked"}</p></div>{linked.data && <span className={isLive ? "paper-tag live-tag" : "paper-tag"}>{isLive ? "LIVE · REAL MONEY" : "PAPER MODE"}</span>}</div>
       {!linked.data && <p className="auth-message">{linked.status === "loading" ? "Loading your broker account…" : linked.status === "none" ? "Link a broker in Settings → Broker to place orders." : linked.error}</p>}
+
+      <TradeConversation token={token} symbol={orderSymbol.trim()} riskPercent={riskPercent} ready={Boolean(linked.data)} onUsePlan={(plan) => {
+        setOrderSymbol(plan.symbol);
+        const known = initialInstruments.find((item) => item.symbol === plan.symbol);
+        if (known) setTradeSymbol(known);
+        setOrderSide(plan.side === "buy" ? "Buy" : "Sell");
+        setQuantity(String(plan.units));
+        setLimitPrice(String(plan.price));
+        setStopLoss(plan.stops_supported ? String(plan.stop_loss) : "");
+        setTakeProfit(plan.stops_supported ? String(plan.take_profit) : "");
+        setConfirmed(false);
+      }} />
 
       <div className="trade-account-row">
         <div className="trade-account-card">
@@ -886,6 +982,7 @@ function TradeView({ symbol, orderSide, setOrderSide, linked, token }: { symbol:
           <label className="field-label">Symbol<input list="order-symbols" value={orderSymbol} maxLength={20} onChange={(event) => { const value = event.target.value.toUpperCase(); setOrderSymbol(value); const nextSymbol = initialInstruments.find((item) => item.symbol === value); if (nextSymbol) { setTradeSymbol(nextSymbol); setLimitPrice(nextSymbol.price.replace(/,/g, "")); } }} placeholder={linked.data?.broker === "oanda" ? "EUR_USD" : "AAPL"}/><datalist id="order-symbols">{initialInstruments.map((item) => <option key={item.symbol} value={item.symbol}>{item.name}</option>)}</datalist></label>
           <div className="field-row"><label className="field-label">Order type<select disabled><option>Market</option></select></label></div>
           <div className="field-row"><label className="field-label">Quantity<input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="decimal"/></label><label className="field-label">Reference price ({accountCurrency}, estimate only)<input value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal"/></label></div>
+          <div className="field-row"><label className="field-label">Stop loss (optional)<input value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} inputMode="decimal" placeholder="Zuri can fill this"/></label><label className="field-label">Take profit (optional)<input value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} inputMode="decimal" placeholder="Zuri can fill this"/></label></div>
           <div className="order-estimate"><span>Estimated value</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Buying power after order</span><b>{formatCurrency(buyingPowerAfter)}</b></div>
           {isLive && <label className="field-label">Type CONFIRM LIVE to place a real-money order<input value={livePhrase} onChange={(event) => setLivePhrase(event.target.value)} autoComplete="off"/></label>}
           <label className="field-label"><span><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}/> I confirm this {isLive ? "LIVE" : "paper"} market order</span></label>
@@ -913,188 +1010,6 @@ function PositionsTable({ positions, currency }: { positions: LinkedPosition[]; 
     const pl = position.unrealized_pl;
     return <tr key={position.symbol}><td><b>{position.symbol}</b></td><td><span className={isLong ? "side-pill long" : "side-pill short"}>{isLong ? "Long" : "Short"}</span></td><td>{position.quantity ?? "—"}</td><td>{formatMoney(position.avg_entry_price, currency)}</td><td>{formatMoney(position.current_price, currency)}</td><td className={pl === null ? "" : pl >= 0 ? "positive" : "negative"}>{pl === null ? "—" : `${pl >= 0 ? "+" : "-"}${formatMoney(Math.abs(pl), currency)}`}</td><td className={(position.unrealized_plpc ?? 0) >= 0 ? "positive" : "negative"}>{pct(position.unrealized_plpc)}</td></tr>;
   })}</tbody></table></div>;
-}
-function HistoryView() {
-  type HistoryTab = "positions" | "orders" | "deals";
-  type HistoryPeriod = "Today" | "Last week" | "Last month" | "Last 3 months" | "Last 6 months" | "All time";
-  type SortKey = "default" | "symbol" | "ticket" | "type" | "volume" | "openTime" | "closeTime" | "profit";
-
-  const [activeTab, setActiveTab] = useState<HistoryTab>("positions");
-  const [period, setPeriod] = useState<HistoryPeriod>("Last month");
-  const [sortKey, setSortKey] = useState<SortKey>("default");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
-
-  const historyRows = {
-    positions: [
-      { ticket: 412881, symbol: "BTCUSD", type: "Long", volume: "0.025 BTC", openTime: "2026-10-02T14:32:00", closeTime: "—", profit: "+$126.80", period: "Last week" },
-      { ticket: 412734, symbol: "ETHUSD", type: "Long", volume: "2.00 ETH", openTime: "2026-09-28T11:10:00", closeTime: "—", profit: "+$86.80", period: "Last month" },
-      { ticket: 412602, symbol: "SOLUSD", type: "Short", volume: "20 SOL", openTime: "2026-09-18T09:42:00", closeTime: "—", profit: "+$49.60", period: "Last 3 months" },
-      { ticket: 412414, symbol: "EURUSD", type: "Short", volume: "4.5 lots", openTime: "2026-08-25T08:15:00", closeTime: "—", profit: "-$28.20", period: "Last 6 months" },
-    ],
-    orders: [
-      { ticket: 412881, symbol: "BTCUSD", type: "Buy", volume: "0.025 BTC", openTime: "2026-10-02T14:32:00", closeTime: "2026-10-02T14:32:10", profit: "+$126.80", period: "Last week" },
-      { ticket: 412834, symbol: "ETHUSD", type: "Sell", volume: "2.00 ETH", openTime: "2026-09-30T12:19:00", closeTime: "2026-09-30T12:20:15", profit: "+$42.40", period: "Last month" },
-      { ticket: 412739, symbol: "AAPL", type: "Buy", volume: "140 shares", openTime: "2026-09-18T15:04:00", closeTime: "2026-09-18T15:04:25", profit: "+$312.60", period: "Last 3 months" },
-      { ticket: 412636, symbol: "NVDA", type: "Sell", volume: "80 shares", openTime: "2026-08-29T09:08:00", closeTime: "2026-08-29T09:09:10", profit: "+$184.50", period: "Last 6 months" },
-    ],
-    deals: [
-      { ticket: 412881, symbol: "BTCUSD", type: "Buy", volume: "0.025 BTC", openTime: "2026-10-02T14:32:00", closeTime: "2026-10-02T14:32:10", profit: "+$126.80", period: "Today" },
-      { ticket: 412734, symbol: "ETHUSD", type: "Sell", volume: "1.00 ETH", openTime: "2026-09-29T18:41:00", closeTime: "2026-09-29T18:42:45", profit: "+$85.10", period: "Last week" },
-      { ticket: 412612, symbol: "SOLUSD", type: "Sell", volume: "18 SOL", openTime: "2026-09-14T10:55:00", closeTime: "2026-09-14T11:02:00", profit: "+$44.30", period: "Last month" },
-      { ticket: 412481, symbol: "EURUSD", type: "Buy", volume: "1.2 lots", openTime: "2026-08-15T07:18:00", closeTime: "2026-08-15T07:21:20", profit: "+$63.75", period: "Last 3 months" },
-      { ticket: 412390, symbol: "GOLD", type: "Buy", volume: "0.60 lots", openTime: "2026-07-12T15:32:00", closeTime: "2026-07-12T16:04:00", profit: "+$118.30", period: "Last 6 months" },
-    ],
-  } as const;
-
-  const periodOptions: HistoryPeriod[] = ["Today", "Last week", "Last month", "Last 3 months", "Last 6 months", "All time"];
-  const selectOptions: SortKey[] = ["default", "symbol", "ticket", "type", "volume", "openTime", "closeTime", "profit"];
-  const sortLabels: Record<SortKey, string> = {
-    default: "Default",
-    symbol: "Symbol",
-    ticket: "Ticket",
-    type: "Type",
-    volume: "Volume",
-    openTime: "Open time",
-    closeTime: "Close time",
-    profit: "Profit",
-  };
-
-  const getRowValue = (row: (typeof historyRows)[HistoryTab][number], key: SortKey) => {
-    switch (key) {
-      case "symbol": return row.symbol.toLowerCase();
-      case "ticket": return row.ticket;
-      case "type": return row.type.toLowerCase();
-      case "volume": {
-        const match = row.volume.match(/\d+(?:\.\d+)?/);
-        return match ? Number(match[0]) : 0;
-      }
-      case "openTime": return new Date(row.openTime).getTime();
-      case "closeTime": return row.closeTime === "—" ? 0 : new Date(row.closeTime).getTime();
-      case "profit": {
-        const value = Number(String(row.profit).replace(/[$,+]/g, ""));
-        return Number.isFinite(value) ? value : 0;
-      }
-      default:
-        return new Date(row.closeTime === "—" ? row.openTime : row.closeTime).getTime();
-    }
-  };
-
-  const getFilteredRows = () => {
-    const rows = [...historyRows[activeTab]];
-    const periodIndex = periodOptions.indexOf(period);
-
-    return rows.filter((row) => {
-      if (period === "All time") return true;
-      const rowIndex = periodOptions.indexOf((row.period as HistoryPeriod) ?? "All time");
-      return rowIndex <= periodIndex && rowIndex >= 0;
-    }).sort((left, right) => {
-      const leftValue = getRowValue(left, sortKey);
-      const rightValue = getRowValue(right, sortKey);
-      if (typeof leftValue === "string" && typeof rightValue === "string") {
-        return sortDirection === "asc" ? leftValue.localeCompare(rightValue) : rightValue.localeCompare(leftValue);
-      }
-      if (typeof leftValue === "number" && typeof rightValue === "number") {
-        return sortDirection === "asc" ? leftValue - rightValue : rightValue - leftValue;
-      }
-      return 0;
-    });
-  };
-
-  const visibleRows = getFilteredRows();
-  const totalProfit = visibleRows.reduce((sum, row) => {
-    const numeric = Number(String(row.profit).replace(/[$,+]/g, ""));
-    return sum + (Number.isFinite(numeric) ? numeric : 0);
-  }, 0);
-
-  const updateSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
-      return;
-    }
-    setSortKey(key);
-    setSortDirection(key === "profit" ? "desc" : "asc");
-  };
-
-  const statusClass = (value: string) => value.includes("-") ? "negative" : "positive";
-
-  return (
-    <div className="secondary-view">
-      <div className="section-title history-title">
-        <div>
-          <span className="small-label">PAPER ACCOUNT · TRADE LOG</span>
-          <h2>History</h2>
-        </div>
-        <button className="outline-button" type="button">⇩ <span>Export CSV</span></button>
-      </div>
-
-      <div className="content-card history-card">
-        <div className="history-toolbar">
-          <div className="history-tabs" aria-label="History tabs">
-            {(["positions", "orders", "deals"] as HistoryTab[]).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                className={activeTab === tab ? "history-tab active" : "history-tab"}
-                onClick={() => setActiveTab(tab)}
-              >
-                {tab[0].toUpperCase() + tab.slice(1)}
-              </button>
-            ))}
-          </div>
-
-          <div className="history-controls">
-            <label className="history-filter">
-              <span>Period</span>
-              <select value={period} onChange={(event) => setPeriod(event.target.value as HistoryPeriod)}>
-                {periodOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </label>
-
-            <label className="history-filter">
-              <span>Sort by</span>
-              <select value={sortKey} onChange={(event) => updateSort(event.target.value as SortKey)}>
-                {selectOptions.map((option) => <option key={option} value={option}>{sortLabels[option]}</option>)}
-              </select>
-            </label>
-          </div>
-        </div>
-
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th><button type="button" className="history-sort-button" onClick={() => updateSort("ticket")}>Ticket</button></th>
-                <th><button type="button" className="history-sort-button" onClick={() => updateSort("symbol")}>Symbol</button></th>
-                <th><button type="button" className="history-sort-button" onClick={() => updateSort("type")}>Type</button></th>
-                <th><button type="button" className="history-sort-button" onClick={() => updateSort("volume")}>Volume</button></th>
-                <th><button type="button" className="history-sort-button" onClick={() => updateSort("openTime")}>Open time</button></th>
-                <th><button type="button" className="history-sort-button" onClick={() => updateSort("closeTime")}>Close time</button></th>
-                <th><button type="button" className="history-sort-button" onClick={() => updateSort("profit")}>Profit</button></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((row) => (
-                <tr key={`${activeTab}-${row.ticket}-${row.symbol}`}>
-                  <td><b>{row.ticket}</b></td>
-                  <td>{row.symbol}</td>
-                  <td><span className={row.type === "Long" || row.type === "Buy" ? "side-pill long" : "side-pill short"}>{row.type}</span></td>
-                  <td>{row.volume}</td>
-                  <td>{new Date(row.openTime).toLocaleString()}</td>
-                  <td>{row.closeTime === "—" ? "Open" : new Date(row.closeTime).toLocaleString()}</td>
-                  <td className={statusClass(String(row.profit))}>{row.profit}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="history-summary">
-        <span>{visibleRows.length} records in {period}</span>
-        <span>Total {activeTab === "positions" ? "floating" : "realized"} P&L <b className={totalProfit >= 0 ? "positive" : "negative"}>{totalProfit >= 0 ? "+" : "-"}${Math.abs(totalProfit).toFixed(2)}</b></span>
-      </div>
-    </div>
-  );
 }
 function SettingsView({
   userId,
@@ -1261,10 +1176,7 @@ function SettingsView({
           {profile?.trading_experience === "Experienced" && <p className="auth-message" role="note">Zuri is built for newer traders first. You can use everything here, and the assistant will keep answers concise and technical. Advanced tools are on the way.</p>}
           {profile?.trading_experience === "Learning the basics" && <p className="auth-message" role="note">The assistant will use standard trading terms with short reminders as you learn.</p>}
         </div>
-        <div className="settings-section">
-          <span className="small-label">SIMULATED ACCOUNT</span>
-          <p>Broker balances and execution details shown in this prototype are demo data and are not stored as account records.</p>
-        </div>
+        <BrokerConnections onChange={linked.refresh} />
       </>
     ),
     Broker: (

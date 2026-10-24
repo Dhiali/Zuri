@@ -115,6 +115,9 @@ class AssistantChatTests(unittest.TestCase):
         patcher = patch("backend.main._linked_account_context", return_value="")
         patcher.start()
         self.addCleanup(patcher.stop)
+        journey_patcher = patch("backend.main.get_zuri_journey", return_value=None)
+        journey_patcher.start()
+        self.addCleanup(journey_patcher.stop)
 
     def tearDown(self):
         from backend.main import require_authenticated_user
@@ -361,11 +364,56 @@ class BrokerTests(unittest.TestCase):
         self.app = app
         self.client = TestClient(app)
         app.dependency_overrides[require_authenticated_user] = lambda: {"id": "test-user"}
+        self.capture = patch("backend.main._capture_trade")
+        self.capture_mock = self.capture.start()
+        self.addCleanup(self.capture.stop)
 
     def tearDown(self):
         from backend.main import require_authenticated_user
 
         self.app.dependency_overrides.pop(require_authenticated_user, None)
+
+    def test_order_is_captured_in_the_journal_automatically(self):
+        adapter = SimpleNamespace(
+            place_order=lambda *a: {"order_id": "1", "status": "accepted"},
+            account=lambda: {"equity": 1000.0},
+            price=lambda s: 10.0,
+            positions=lambda: [{"symbol": "AAPL", "side": "long", "quantity": 5.0, "avg_entry_price": 8.0}],
+        )
+        with patch("backend.main._load_connection", return_value=({"environment": "paper"}, adapter)):
+            body = {"symbol": "aapl", "side": "sell", "quantity": 2, "confirmed": True}
+            self.assertEqual(self.client.post("/api/brokers/alpaca/orders", json=body).status_code, 200)
+        args = self.capture_mock.call_args.args
+        self.assertEqual(args[1:4], ("order_placed", "AAPL", "sell"))
+        context = args[-1]
+        self.assertEqual(context["action"], "exit")
+        self.assertEqual(context["pl_per_unit"], 2.0)
+
+    def test_journal_analytics_find_leaks(self):
+        from backend.journal import compute_stats
+
+        def event(kind, symbol, at, **details):
+            return {"kind": kind, "symbol": symbol, "created_at": at, "details": details}
+
+        events = [
+            event("watchlist_add", "AAPL", "2026-10-01T08:00:00+00:00"),
+            event("order_placed", "AAPL", "2026-10-02T08:00:00+00:00", action="entry", notional=500, equity=1000, stop_loss=None),
+            event("order_placed", "AAPL", "2026-10-02T09:00:00+00:00", action="exit", realized_pl=-20.0),
+            event("order_placed", "TSLA", "2026-10-02T10:00:00+00:00", action="entry", notional=100, equity=1000, stop_loss=90),
+        ]
+        stats = compute_stats(events, [], [], 1000.0)
+        self.assertEqual(stats["entry_trades"], 2)
+        self.assertEqual(stats["trades_without_stop_loss"], 1)
+        self.assertEqual(stats["max_position_pct_of_equity"], 50.0)
+        self.assertEqual(stats["median_hours_interest_to_first_trade"], 24.0)
+        self.assertEqual(stats["win_rate_pct"], 0.0)
+        self.assertEqual(stats["trades_with_journal_note_pct"], 0.0)
+
+    def test_analysis_without_activity_does_not_call_the_ai(self):
+        with patch("backend.main._load_journey_data", return_value=([], [], [], None, None)), patch("backend.main.get_groq_client") as groq:
+            response = self.client.post("/api/journal/analyze", json={})
+        self.assertEqual(response.status_code, 200)
+        groq.assert_not_called()
 
     def _row(self, environment):
         from cryptography.fernet import Fernet
@@ -421,6 +469,16 @@ class BrokerTests(unittest.TestCase):
         with patch("backend.main._active_connection", side_effect=RuntimeError("down")):
             self.assertEqual(_linked_account_context("test-user"), "")
 
+    def test_journey_prompt_reflects_mode_level_and_missing_broker(self):
+        from backend.main import _journey_prompt
+
+        prompt = _journey_prompt({"mode": "coach", "level": "foundations"}, "")
+        self.assertIn("Foundations", prompt)
+        self.assertIn("training buddy", prompt)
+        self.assertIn("Alpaca paper", prompt)
+        self.assertNotIn("Alpaca paper", _journey_prompt({"mode": "assistant", "level": "advancing"}, " linked"))
+        self.assertIn("Alpaca paper", _journey_prompt(None, ""))
+
     def test_live_order_requires_phrase(self):
         adapter = SimpleNamespace(place_order=lambda *a: {"order_id": "1", "status": "accepted"})
         with patch("backend.main._load_connection", return_value=({"environment": "live"}, adapter)):
@@ -431,6 +489,106 @@ class BrokerTests(unittest.TestCase):
             )
             self.assertEqual(ok.status_code, 200)
             self.assertEqual(ok.json()["environment"], "live")
+
+    def test_history_pairs_fills_into_round_trips(self):
+        fills = [
+            {"id": "1", "symbol": "AAPL", "side": "buy", "quantity": 10, "price": 100.0, "time": "2026-10-01T10:00:00Z"},
+            {"id": "2", "symbol": "AAPL", "side": "sell", "quantity": 4, "price": 110.0, "time": "2026-10-02T10:00:00Z"},
+        ]
+        adapter = SimpleNamespace(history=lambda: {"fills": fills, "round_trips": None})
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "paper"}, adapter)):
+            body = self.client.get("/api/history").json()
+        self.assertEqual(len(body["round_trips"]), 1)
+        self.assertEqual(body["round_trips"][0]["realized_pl"], 40.0)
+        self.assertEqual(body["round_trips"][0]["quantity"], 4)
+
+    def test_position_sizing_is_exact_and_capped(self):
+        from backend import sizing
+
+        sized = sizing.size_position(equity=10000, price=100, stop=98, risk_percent=1)
+        self.assertEqual(sized["units"], 50)
+        self.assertEqual(sized["actual_risk"], 100.0)
+        capped = sizing.size_position(equity=10000, price=100, stop=98, risk_percent=1, max_notional=2000)
+        self.assertEqual(capped["units"], 20)
+        self.assertEqual(capped["capped_by"], "buying_power")
+        self.assertEqual(sizing.size_position(equity=100, price=100, stop=50, risk_percent=1)["units"], 0)
+        forex = sizing.size_position(equity=10000, price=1.1, stop=1.095, risk_percent=1, forex=True)
+        self.assertEqual(forex["units"], 20000)
+        self.assertEqual(forex["lots"], 0.2)
+
+    def test_suggested_levels_sit_on_the_correct_sides(self):
+        from backend import sizing
+
+        for side in ("buy", "sell"):
+            stop, target = sizing.suggest_levels(side, 100.0, 1.0)
+            self.assertTrue(sizing.levels_valid(side, 100.0, stop, target))
+        self.assertFalse(sizing.levels_valid("buy", 100.0, 101.0, 105.0))
+
+    def test_trade_conversation_returns_server_calculated_plan(self):
+        import json as _json
+
+        adapter = SimpleNamespace(
+            account=lambda: {"equity": 10000.0, "currency": "USD", "buying_power": 40000.0},
+            positions=lambda: [],
+            price=lambda s: 100.0,
+            candles=lambda s: [{"t": "x", "o": 100, "h": 101, "l": 99, "c": 100}] * 20,
+        )
+        reply = {"reply": "Sounds good, I prepared the numbers.", "emote": "🎯", "proposal": {"symbol": "aapl", "side": "buy", "stop_loss": None, "take_profit": None}}
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=_json.dumps(reply)))])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: completion)))
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "paper"}, adapter)), \
+             patch("backend.main.get_user_profile_traits", return_value=([], None)), \
+             patch("backend.main.get_zuri_journey", return_value=None), \
+             patch("backend.main.get_groq_client", return_value=client):
+            response = self.client.post("/api/trade/converse", headers={"Authorization": "Bearer t"}, json={"messages": [{"role": "user", "content": "I want to buy AAPL"}], "risk_percent": 1})
+        self.assertEqual(response.status_code, 200)
+        plan = response.json()["plan"]
+        self.assertEqual(plan["symbol"], "AAPL")
+        self.assertGreater(plan["units"], 0)
+        self.assertLess(plan["stop_loss"], 100.0)
+        self.assertGreater(plan["take_profit"], 100.0)
+        self.assertLessEqual(plan["actual_risk"], 100.0)
+
+    def test_order_with_levels_on_wrong_side_is_rejected(self):
+        adapter = SimpleNamespace(
+            place_order=lambda *a: {"order_id": "1"}, account=lambda: {"equity": 1000.0},
+            price=lambda s: 10.0, positions=lambda: [],
+        )
+        with patch("backend.main._load_connection", return_value=({"environment": "paper"}, adapter)):
+            response = self.client.post("/api/brokers/alpaca/orders", json={"symbol": "AAPL", "side": "buy", "quantity": 1, "confirmed": True, "stop_loss": 11.0, "take_profit": 12.0})
+        self.assertEqual(response.status_code, 400)
+
+    def test_short_round_trip_profits_when_price_falls(self):
+        from backend.journal import pair_fills
+
+        trips = pair_fills([
+            {"id": "1", "symbol": "X", "side": "sell", "quantity": 2, "price": 50.0, "time": "2026-10-01T10:00:00Z"},
+            {"id": "2", "symbol": "X", "side": "buy", "quantity": 2, "price": 45.0, "time": "2026-10-01T11:00:00Z"},
+        ])
+        self.assertEqual(trips[0]["side"], "short")
+        self.assertEqual(trips[0]["realized_pl"], 10.0)
+
+    def test_annotations_are_sanitised(self):
+        from backend.journal import sanitize_annotations
+
+        raw = [
+            {"kind": "support", "index": 3, "price": 101.0, "text": "x" * 300},
+            {"kind": "bogus", "index": 999, "price": 5000, "text": "outside the chart"},
+            "not a dict",
+        ] + [{"kind": "note", "index": 1, "price": 100.5, "text": "n"}] * 10
+        clean = sanitize_annotations(raw, 20, 99.0, 105.0)
+        self.assertLessEqual(len(clean), 6)
+        self.assertTrue(all(len(a["text"]) <= 140 for a in clean))
+        self.assertTrue(all(a["index"] is None or a["index"] < 20 for a in clean))
+
+    def test_screenshot_must_be_a_jpeg_data_url(self):
+        snapshot = {"id": "11111111-1111-1111-1111-111111111111", "symbol": "AAPL"}
+        with patch("backend.main._own_snapshot", return_value=snapshot), patch("backend.main._service_request") as service:
+            bad = self.client.post(f"/api/snapshots/{snapshot['id']}/screenshot", json={"image": "data:text/html;base64," + "A" * 200})
+            self.assertEqual(bad.status_code, 400)
+            good = self.client.post(f"/api/snapshots/{snapshot['id']}/screenshot", json={"image": "data:image/jpeg;base64," + "A" * 200})
+            self.assertEqual(good.status_code, 200)
+            service.assert_called_once()
 
 
 if __name__ == "__main__":
