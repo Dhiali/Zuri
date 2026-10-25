@@ -24,6 +24,7 @@ from groq import Groq
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import brokers
+from . import coaching
 from . import journal as journal_analytics
 from . import sizing
 
@@ -1281,6 +1282,233 @@ def journal_insights(tz_offset_minutes: int = Query(default=0, ge=-840, le=840),
         "stats": journal_analytics.compute_stats(events, entries, positions, equity, tz_offset_minutes),
         "timeline": journal_analytics.timeline(events, 30),
     }
+
+
+COMMUNITY_STRATEGIES = [
+    "Scalping", "Day trading", "Swing trading", "Position trading", "Trend following",
+    "Breakouts", "Mean reversion", "Support & resistance", "News trading",
+]
+UUID_RE = re.compile(r"[0-9a-fA-F-]{36}")
+CONTACT_OR_LINK_RE = re.compile(
+    r"(https?:|www\.|[\w.+-]+@[\w-]+\.[\w.]+|\b[a-z0-9-]+\.(com|net|org|io|co|ly|me|ai|app|xyz|info|gg)\b)", re.IGNORECASE
+)
+COMMUNITY_DAILY_POST_LIMIT = 10
+COMMUNITY_HIDE_AFTER_REPORTS = 3
+
+
+def _closed_trades(adapter) -> list[dict]:
+    data = adapter.history()
+    trips = data.get("round_trips")
+    return trips if trips is not None else journal_analytics.pair_fills(data["fills"])
+
+
+def _coaching_bundle(user_id: str, tz_offset_minutes: int) -> dict:
+    try:
+        row, adapter = _active_connection(user_id)
+    except HTTPException as e:
+        if e.status_code == 404:
+            return {"status": "no_broker"}
+        raise
+    if not hasattr(adapter, "history"):
+        return {"status": "unsupported"}
+    trips = _closed_trades(adapter)
+    entries = _service_request("journal_entries", "GET", {"select": "setup,source", "user_id": f"eq.{user_id}", "limit": "500"})
+    weekly = coaching.weekly_breakdown(trips, tz_offset_minutes)
+    profile = coaching.strategy_profile(trips, entries)
+    patterns = coaching.after_loss_pattern(trips)
+    advice = coaching.suggestions(profile, patterns)
+    topics = list(dict.fromkeys(t for item in advice for t in item["topics"]))
+    suggested_tags = [profile["style"]] if profile.get("style") else []
+    return {
+        "status": "ok",
+        "broker": row["broker"],
+        "trades_analyzed": profile["trades"],
+        "weekly": weekly,
+        "profile": profile,
+        "patterns": patterns,
+        "headlines": coaching.headlines(weekly, patterns),
+        "suggestions": advice,
+        "resources": coaching.resources_for(topics),
+        "suggested_tags": suggested_tags,
+    }
+
+
+@app.get("/api/dashboard/coaching")
+def dashboard_coaching(tz_offset_minutes: int = Query(default=0, ge=-840, le=840), user: dict = Depends(require_authenticated_user)):
+    return _coaching_bundle(user["id"], tz_offset_minutes)
+
+
+class CoachNoteRequest(BaseModel):
+    tz_offset_minutes: int = Field(default=0, ge=-840, le=840)
+
+
+@app.post("/api/dashboard/coach-note")
+def dashboard_coach_note(request: CoachNoteRequest, user: dict = Depends(require_authenticated_user), authorization: str | None = Header(default=None)):
+    bundle = _coaching_bundle(user["id"], request.tz_offset_minutes)
+    if bundle.get("status") != "ok" or bundle["trades_analyzed"] < 3:
+        raise HTTPException(status_code=400, detail="Zuri needs at least 3 closed trades to write a review.")
+    facts = {k: bundle[k] for k in ("weekly", "profile", "patterns", "headlines")}
+    prompt = (
+        "You are Zuri, an expert trading coach reviewing a new trader's closed-trade statistics. "
+        "Write a weekly review in under 160 words: one strength, one leak, and one concrete experiment for next week. "
+        "Use ONLY numbers present in the JSON; never invent or recompute figures. Where a comparison has verdict 'possibly_chance' "
+        "or 'insufficient_data', say the evidence is not strong enough to act on. Do not predict markets or promise results. "
+        f"STATS: {json.dumps(facts, default=str)}"
+    )
+    try:
+        response = get_groq_client().chat.completions.create(
+            messages=[{"role": "system", "content": prompt}, {"role": "user", "content": "Write my weekly review."}],
+            model="openai/gpt-oss-20b", temperature=0.3, max_tokens=500,
+        )
+        note = (response.choices[0].message.content or "").strip()
+        if not note:
+            raise ValueError("empty")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Zuri could not write the review: {e}")
+    return {"note": note}
+
+
+class CommunityProfileRequest(BaseModel):
+    handle: str = Field(pattern=r"^[A-Za-z0-9_]{3,20}$")
+    strategies: list[str] = Field(min_length=1, max_length=5)
+    bio: str = Field(default="", max_length=160)
+
+
+class CommunityPostRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=600)
+    strategy: str | None = None
+    parent_id: str | None = None
+
+
+def _check_community_text(*values: str):
+    for value in values:
+        if CONTACT_OR_LINK_RE.search(value):
+            raise HTTPException(status_code=400, detail="Links and contact details are not allowed in the community.")
+
+
+def _my_community_profile(user_id: str) -> dict | None:
+    rows = _service_request("community_profiles", "GET", {"select": "*", "user_id": f"eq.{user_id}"})
+    return rows[0] if rows else None
+
+
+def _pg_list(values: list[str]) -> str:
+    return ",".join(f'"{v}"' for v in values)
+
+
+@app.get("/api/community")
+def community_overview(strategy: str | None = Query(default=None, max_length=40), user: dict = Depends(require_authenticated_user)):
+    profile = _my_community_profile(user["id"])
+    base = {"available_strategies": COMMUNITY_STRATEGIES, "profile": None, "traders": [], "posts": []}
+    if not profile:
+        return base
+    if strategy is not None and strategy not in profile["strategies"]:
+        raise HTTPException(status_code=400, detail="Pick one of your own strategies to filter by.")
+    tags = [strategy] if strategy else profile["strategies"]
+    traders = _service_request("community_profiles", "GET", {
+        "select": "user_id,handle,strategies,bio", "strategies": f"ov.{{{_pg_list(tags)}}}", "user_id": f"neq.{user['id']}", "limit": "20",
+    })
+    posts = _service_request("community_posts", "GET", {
+        "select": "id,author_id,strategy,body,created_at", "parent_id": "is.null", "hidden": "eq.false",
+        "strategy": f"in.({_pg_list(tags)})", "order": "created_at.desc", "limit": "30",
+    })
+    replies = _service_request("community_posts", "GET", {
+        "select": "id,author_id,parent_id,body,created_at", "hidden": "eq.false",
+        "parent_id": f"in.({','.join(p['id'] for p in posts)})", "order": "created_at.asc", "limit": "200",
+    }) if posts else []
+    author_ids = {p["author_id"] for p in posts} | {r["author_id"] for r in replies}
+    handles = {profile["user_id"]: profile["handle"]}
+    missing = [a for a in author_ids if a not in handles]
+    if missing:
+        for row in _service_request("community_profiles", "GET", {"select": "user_id,handle", "user_id": f"in.({','.join(missing)})"}):
+            handles[row["user_id"]] = row["handle"]
+
+    def present(item: dict) -> dict:
+        return {
+            "id": item["id"], "handle": handles.get(item["author_id"], "former_member"), "body": item["body"],
+            "created_at": item["created_at"], "mine": item["author_id"] == user["id"],
+        }
+
+    by_parent: dict[str, list[dict]] = {}
+    for reply in replies:
+        by_parent.setdefault(reply["parent_id"], []).append(present(reply))
+    return {
+        **base,
+        "profile": {"handle": profile["handle"], "strategies": profile["strategies"], "bio": profile["bio"]},
+        "traders": [{"handle": t["handle"], "strategies": t["strategies"], "shared": sorted(set(t["strategies"]) & set(profile["strategies"])), "bio": t["bio"]} for t in traders],
+        "posts": [{**present(p), "strategy": p["strategy"], "replies": by_parent.get(p["id"], [])} for p in posts],
+    }
+
+
+@app.put("/api/community/profile")
+def save_community_profile(request: CommunityProfileRequest, user: dict = Depends(require_authenticated_user)):
+    if any(s not in COMMUNITY_STRATEGIES for s in request.strategies) or len(set(request.strategies)) != len(request.strategies):
+        raise HTTPException(status_code=400, detail="Choose strategies from the list.")
+    _check_community_text(request.handle, request.bio)
+    taken = _service_request("community_profiles", "GET", {"select": "user_id", "handle": f"ilike.{request.handle}", "user_id": f"neq.{user['id']}"})
+    if taken:
+        raise HTTPException(status_code=409, detail="That handle is already taken.")
+    payload = {"handle": request.handle, "strategies": request.strategies, "bio": request.bio.strip()}
+    if _my_community_profile(user["id"]):
+        _service_request("community_profiles", "PATCH", {"user_id": f"eq.{user['id']}"}, json=payload)
+    else:
+        _service_request("community_profiles", "POST", json={"user_id": user["id"], **payload})
+    return {"status": "saved"}
+
+
+@app.delete("/api/community/profile")
+def leave_community(user: dict = Depends(require_authenticated_user)):
+    _service_request("community_posts", "DELETE", {"author_id": f"eq.{user['id']}"})
+    _service_request("community_profiles", "DELETE", {"user_id": f"eq.{user['id']}"})
+    return {"status": "left"}
+
+
+@app.post("/api/community/posts")
+def create_community_post(request: CommunityPostRequest, user: dict = Depends(require_authenticated_user)):
+    profile = _my_community_profile(user["id"])
+    if not profile:
+        raise HTTPException(status_code=403, detail="Join the community first.")
+    _check_community_text(request.body)
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    recent = _service_request("community_posts", "GET", {"select": "id", "author_id": f"eq.{user['id']}", "created_at": f"gte.{since}", "limit": str(COMMUNITY_DAILY_POST_LIMIT)})
+    if len(recent) >= COMMUNITY_DAILY_POST_LIMIT:
+        raise HTTPException(status_code=429, detail="Daily post limit reached. Try again tomorrow.")
+    payload: dict = {"author_id": user["id"], "body": request.body.strip()}
+    if request.parent_id:
+        if not UUID_RE.fullmatch(request.parent_id):
+            raise HTTPException(status_code=400, detail="Invalid post.")
+        parent = _service_request("community_posts", "GET", {"select": "id,strategy", "id": f"eq.{request.parent_id}", "parent_id": "is.null", "hidden": "eq.false"})
+        if not parent:
+            raise HTTPException(status_code=404, detail="Post not found.")
+        payload.update(parent_id=request.parent_id, strategy=parent[0]["strategy"])
+    else:
+        if request.strategy not in profile["strategies"]:
+            raise HTTPException(status_code=400, detail="Post under one of your strategies.")
+        payload["strategy"] = request.strategy
+    _service_request("community_posts", "POST", json=payload)
+    return {"status": "posted"}
+
+
+@app.delete("/api/community/posts/{post_id}")
+def delete_community_post(post_id: str, user: dict = Depends(require_authenticated_user)):
+    if not UUID_RE.fullmatch(post_id):
+        raise HTTPException(status_code=400, detail="Invalid post.")
+    _service_request("community_posts", "DELETE", {"id": f"eq.{post_id}", "author_id": f"eq.{user['id']}"})
+    return {"status": "deleted"}
+
+
+@app.post("/api/community/posts/{post_id}/report")
+def report_community_post(post_id: str, user: dict = Depends(require_authenticated_user)):
+    if not UUID_RE.fullmatch(post_id):
+        raise HTTPException(status_code=400, detail="Invalid post.")
+    post = _service_request("community_posts", "GET", {"select": "id,author_id", "id": f"eq.{post_id}"})
+    if not post or post[0]["author_id"] == user["id"]:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    if not _service_request("community_reports", "GET", {"select": "post_id", "post_id": f"eq.{post_id}", "reporter_id": f"eq.{user['id']}"}):
+        _service_request("community_reports", "POST", json={"post_id": post_id, "reporter_id": user["id"]})
+    reports = _service_request("community_reports", "GET", {"select": "reporter_id", "post_id": f"eq.{post_id}"})
+    if len(reports) >= COMMUNITY_HIDE_AFTER_REPORTS:
+        _service_request("community_posts", "PATCH", {"id": f"eq.{post_id}"}, json={"hidden": True})
+    return {"status": "reported"}
 
 
 class JournalAnalyzeRequest(BaseModel):

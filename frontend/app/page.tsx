@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useZuriAuth, ZuriAuthGate } from "./auth";
 import { BrokerConnections } from "./broker-connections";
 import { HistoryView } from "./history-view";
+import { CommunityPanel, CoachingPanel } from "./dashboard-insights";
 import { TradeConversation } from "./trade-conversation";
 import { SnapshotGallery, captureScreenForTrade } from "./trade-snapshots";
 import { backendUrl, formatMoney, useLinkedAccount, type LinkedAccountState, type LinkedPosition } from "./linked-account";
@@ -406,6 +407,8 @@ function TradingWorkspace() {
               }}
               onAskAboutStory={askZuriAboutNews}
               linked={linkedAccount}
+              token={accessToken}
+              refreshKey={journalRefresh}
               checklist={journey?.phase === "done" ? (
                 <JourneyChecklist
                   journey={journey}
@@ -837,8 +840,12 @@ function Dashboard({
   onAskAboutStory,
   linked,
   checklist,
+  token,
+  refreshKey,
 }: {
   checklist: React.ReactNode;
+  token: string;
+  refreshKey: number;
   setSection: (section: Section) => void;
   news: MarketNewsResponse | null;
   linked: LinkedAccountState;
@@ -847,13 +854,19 @@ function Dashboard({
   onRefresh: () => void;
   onAskAboutStory: (article: MarketNewsArticle) => void;
 }) {
+  const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
+  const [greetingDate] = useState(() => new Date());
+  const hour = greetingDate.getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   return (
     <div className="secondary-view">
       <div className="dashboard-greeting">
-        <div><span className="small-label">FRIDAY, OCTOBER 02, 2026</span><h2>Good afternoon, Jordan.</h2><p>Here’s the signal behind your numbers today.</p></div>
+        <div><span className="small-label">{greetingDate.toLocaleDateString("en-GB", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }).toUpperCase()}</span><h2>{greeting}.</h2><p>Here’s the signal behind your numbers today.</p></div>
         <button className="solid-button" onClick={() => setSection("Trade")}>＋ <span>New order</span></button>
       </div>
       {checklist}
+      <CoachingPanel token={token} refreshKey={refreshKey} onTags={setSuggestedTags} />
+      <CommunityPanel token={token} suggestedTags={suggestedTags} />
       <MarketNewsSection variant="dashboard" news={news} loading={loading} error={error} onRefresh={onRefresh} onAskAboutStory={onAskAboutStory} />
       {linked.status !== "ready" ? (
         <section className="content-card">

@@ -591,5 +591,109 @@ class BrokerTests(unittest.TestCase):
             service.assert_called_once()
 
 
+class CoachingTests(unittest.TestCase):
+    @staticmethod
+    def trip(day: str, pl: float, hour: int = 10, opened: str | None = None, symbol: str = "AAPL"):
+        return {"symbol": symbol, "side": "long", "realized_pl": pl, "closed_at": f"{day}T{hour:02d}:00:00Z", "opened_at": opened}
+
+    def test_weekday_gap_is_reliable_only_with_enough_evidence(self):
+        from backend import coaching
+
+        mondays = [self.trip("2026-09-14", 10) for _ in range(7)] + [self.trip("2026-09-21", -5)]
+        wednesdays = [self.trip("2026-09-16", -10) for _ in range(7)] + [self.trip("2026-09-23", 5)]
+        strong = coaching.compare_groups({"Monday": mondays, "Wednesday": wednesdays})
+        self.assertEqual(strong["verdict"], "reliable")
+        self.assertEqual((strong["best"], strong["worst"]), ("Monday", "Wednesday"))
+        weak = coaching.compare_groups({"Monday": mondays[:5], "Wednesday": wednesdays[:3]})
+        self.assertEqual(weak["verdict"], "insufficient_data")
+        close = coaching.compare_groups({"Monday": mondays[:3] + wednesdays[:2], "Wednesday": mondays[:2] + wednesdays[:3]})
+        self.assertEqual(close["verdict"], "possibly_chance")
+
+    def test_weekly_breakdown_uses_the_users_timezone(self):
+        from datetime import datetime, timezone
+        from backend import coaching
+
+        trips = [self.trip("2026-09-14", 10, hour=23)]  # 23:00 UTC Monday is Tuesday 01:00 in SAST
+        weekly = coaching.weekly_breakdown(trips, 120, now=datetime(2026, 9, 15, tzinfo=timezone.utc))
+        self.assertIn("Tuesday", weekly["weekday"]["groups"])
+        self.assertEqual(weekly["this_week"]["trades"], 1)
+
+    def test_revenge_trading_pattern_and_cooldown_advice(self):
+        from backend import coaching
+
+        trips = []
+        for i in range(6):
+            day = f"2026-09-{10 + i:02d}"
+            trips.append({"symbol": "X", "side": "long", "realized_pl": -10, "opened_at": f"{day}T09:00:00Z", "closed_at": f"{day}T09:30:00Z"})
+            trips.append({"symbol": "X", "side": "long", "realized_pl": -10, "opened_at": f"{day}T09:40:00Z", "closed_at": f"{day}T10:00:00Z"})
+            trips.append({"symbol": "X", "side": "long", "realized_pl": 25, "opened_at": f"{day}T14:00:00Z", "closed_at": f"{day}T15:00:00Z"})
+        patterns = coaching.after_loss_pattern(trips)
+        self.assertEqual(patterns["groups"]["quick_after_loss"]["win_rate_pct"], 0.0)
+        profile = coaching.strategy_profile(trips, [])
+        ids = [s["id"] for s in coaching.suggestions(profile, patterns)]
+        self.assertIn("cooldown", ids)
+
+    def test_small_samples_get_foundation_advice_not_patterns(self):
+        from backend import coaching
+
+        profile = coaching.strategy_profile([self.trip("2026-09-14", 5)], [])
+        advice = coaching.suggestions(profile, {"groups": {}})
+        self.assertEqual([a["id"] for a in advice], ["build-sample"])
+        self.assertTrue(all(r["url"].startswith("https://") for r in coaching.resources_for(advice[0]["topics"])))
+
+
+class CommunityTests(unittest.TestCase):
+    def setUp(self):
+        from backend.main import app, require_authenticated_user
+
+        self.app = app
+        self.client = TestClient(app)
+        app.dependency_overrides[require_authenticated_user] = lambda: {"id": "11111111-1111-1111-1111-111111111111"}
+        self.addCleanup(lambda: app.dependency_overrides.pop(require_authenticated_user, None))
+
+    def test_posts_with_links_or_contact_details_are_rejected(self):
+        profile = {"user_id": "u", "handle": "kim", "strategies": ["Day trading"], "bio": ""}
+        with patch("backend.main._my_community_profile", return_value=profile), patch("backend.main._service_request", return_value=[]):
+            for body in ("join my group t.me/x https://evil.com", "mail me at a@b.com", "visit scam.io now"):
+                response = self.client.post("/api/community/posts", json={"body": body, "strategy": "Day trading"})
+                self.assertEqual(response.status_code, 400, body)
+            ok = self.client.post("/api/community/posts", json={"body": "I wait for the first pullback after the open.", "strategy": "Day trading"})
+            self.assertEqual(ok.status_code, 200)
+
+    def test_posting_requires_joining_and_own_strategy(self):
+        with patch("backend.main._my_community_profile", return_value=None):
+            self.assertEqual(self.client.post("/api/community/posts", json={"body": "hi", "strategy": "Scalping"}).status_code, 403)
+        profile = {"user_id": "u", "handle": "kim", "strategies": ["Day trading"], "bio": ""}
+        with patch("backend.main._my_community_profile", return_value=profile), patch("backend.main._service_request", return_value=[]):
+            self.assertEqual(self.client.post("/api/community/posts", json={"body": "hi", "strategy": "Scalping"}).status_code, 400)
+
+    def test_daily_post_limit(self):
+        profile = {"user_id": "u", "handle": "kim", "strategies": ["Day trading"], "bio": ""}
+        with patch("backend.main._my_community_profile", return_value=profile), patch("backend.main._service_request", return_value=[{"id": str(i)} for i in range(10)]):
+            self.assertEqual(self.client.post("/api/community/posts", json={"body": "hi", "strategy": "Day trading"}).status_code, 429)
+
+    def test_taken_handle_is_rejected(self):
+        with patch("backend.main._service_request", return_value=[{"user_id": "other"}]):
+            response = self.client.put("/api/community/profile", json={"handle": "kim_t", "strategies": ["Scalping"], "bio": ""})
+        self.assertEqual(response.status_code, 409)
+
+    def test_overview_never_exposes_user_ids(self):
+        me = {"user_id": "11111111-1111-1111-1111-111111111111", "handle": "me", "strategies": ["Scalping"], "bio": ""}
+        other = "22222222-2222-2222-2222-222222222222"
+
+        def fake(table, method, params=None, **kw):
+            if table == "community_profiles":
+                return [{"user_id": other, "handle": "pat", "strategies": ["Scalping", "Breakouts"], "bio": "hi"}]
+            if table == "community_posts" and params.get("parent_id") == "is.null":
+                return [{"id": "33333333-3333-3333-3333-333333333333", "author_id": other, "strategy": "Scalping", "body": "tip", "created_at": "2026-10-01T00:00:00Z"}]
+            return []
+
+        with patch("backend.main._my_community_profile", return_value=me), patch("backend.main._service_request", side_effect=fake):
+            body = self.client.get("/api/community").json()
+        self.assertNotIn(other, str(body))
+        self.assertEqual(body["traders"][0]["shared"], ["Scalping"])
+        self.assertEqual(body["posts"][0]["handle"], "pat")
+
+
 if __name__ == "__main__":
     unittest.main()
