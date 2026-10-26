@@ -154,6 +154,41 @@ class AlpacaAdapter:
         )
         return [{"t": b["t"], "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"]} for b in (data.get("bars") or [])][-count:]
 
+    def historical_candles(self, symbol: str, timeframe: str, start: datetime, end: datetime):
+        timeframes = {"1m": "1Min", "5m": "5Min", "15m": "15Min", "1h": "1Hour", "1D": "1Day", "1W": "1Week"}
+        if timeframe == "4h":
+            source_timeframe = "1Hour"
+        else:
+            source_timeframe = timeframes.get(timeframe)
+        if source_timeframe is None:
+            raise HTTPException(status_code=400, detail=f"{timeframe} history is not supported by Alpaca.")
+
+        params = {
+            "timeframe": source_timeframe,
+            "start": start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "end": end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "limit": 10000,
+            "feed": "iex",
+            "adjustment": "raw",
+        }
+        bars = []
+        while len(bars) < 10000:
+            data = _request(
+                "GET", f"https://data.alpaca.markets/v2/stocks/{symbol}/bars",
+                headers=self.headers, params=params,
+            )
+            bars.extend(data.get("bars") or [])
+            token = data.get("next_page_token")
+            if not token or len(bars) >= 10000:
+                break
+            params["page_token"] = token
+
+        candles = [{"t": bar["t"], "o": bar["o"], "h": bar["h"], "l": bar["l"], "c": bar["c"]}
+                   for bar in bars[:10000]]
+        if timeframe != "4h":
+            return candles
+        return _aggregate_candles(candles, 4)
+
     def close_all(self):
         _request("DELETE", f"{self.base}/v2/orders", headers=self.headers)
         _request("DELETE", f"{self.base}/v2/positions", headers=self.headers, params={"cancel_orders": "true"})
@@ -245,6 +280,30 @@ class OandaAdapter:
                 result.append({"t": c.get("time"), "o": values[0], "h": values[1], "l": values[2], "c": values[3]})
         return result
 
+    def historical_candles(self, symbol: str, timeframe: str, start: datetime, end: datetime):
+        granularities = {"1m": "M1", "5m": "M5", "15m": "M15", "1h": "H1", "4h": "H4", "1D": "D", "1W": "W"}
+        granularity = granularities.get(timeframe)
+        if granularity is None:
+            raise HTTPException(status_code=400, detail=f"{timeframe} history is not supported by OANDA.")
+        host = self.base.split("/v3/")[0]
+        data = _request(
+            "GET", f"{host}/v3/instruments/{symbol}/candles",
+            headers=self.headers,
+            params={
+                "granularity": granularity,
+                "from": start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "to": end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "price": "M",
+            },
+        )
+        result = []
+        for candle in data.get("candles", [])[:5000]:
+            mid = candle.get("mid") or {}
+            values = [_num(mid.get(key)) for key in ("o", "h", "l", "c")]
+            if candle.get("time") and all(value is not None for value in values):
+                result.append({"t": candle["time"], "o": values[0], "h": values[1], "l": values[2], "c": values[3]})
+        return result
+
 
 class TradierAdapter:
     def __init__(self, creds: dict[str, str], environment: str):
@@ -328,10 +387,89 @@ class TradierAdapter:
             rows = [rows]
         return [{"t": r.get("time"), "o": r.get("open"), "h": r.get("high"), "l": r.get("low"), "c": r.get("close")} for r in rows][-count:]
 
+    def historical_candles(self, symbol: str, timeframe: str, start: datetime, end: datetime):
+        host = self.base.split("/v1/")[0]
+        if timeframe in {"1m", "5m", "15m"}:
+            data = _request(
+                "GET", f"{host}/v1/markets/timesales",
+                headers=self.headers,
+                params={
+                    "symbol": symbol,
+                    "interval": {"1m": "1min", "5m": "5min", "15m": "15min"}[timeframe],
+                    "start": start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                    "end": end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                    "session_filter": "open",
+                },
+            )
+            rows = ((data.get("series") or {}).get("data")) or []
+            if isinstance(rows, dict):
+                rows = [rows]
+            return [
+                {
+                    "t": row.get("time"),
+                    "o": _num(row.get("open")),
+                    "h": _num(row.get("high")),
+                    "l": _num(row.get("low")),
+                    "c": _num(row.get("close")),
+                }
+                for row in rows[:10000]
+                if row.get("time") and all(_num(row.get(key)) is not None for key in ("open", "high", "low", "close"))
+            ]
+        if timeframe in {"1h", "4h"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{timeframe} history is not supported by Tradier. Choose 1m, 5m, 15m, 1D, or 1W.",
+            )
+        interval = {"1D": "daily", "1W": "weekly"}.get(timeframe)
+        if interval is None:
+            raise HTTPException(status_code=400, detail=f"{timeframe} history is not supported by Tradier.")
+        data = _request(
+            "GET", f"{host}/v1/markets/history",
+            headers=self.headers,
+            params={
+                "symbol": symbol,
+                "interval": interval,
+                "start": start.astimezone(timezone.utc).strftime("%Y-%m-%d"),
+                "end": end.astimezone(timezone.utc).strftime("%Y-%m-%d"),
+            },
+        )
+        history = data.get("history") or {}
+        rows = history.get({"1D": "day", "1W": "week"}[timeframe]) or history.get("day") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        return [
+            {
+                "t": row.get("date"),
+                "o": _num(row.get("open")),
+                "h": _num(row.get("high")),
+                "l": _num(row.get("low")),
+                "c": _num(row.get("close")),
+            }
+            for row in rows[:10000]
+            if row.get("date") and all(_num(row.get(key)) is not None for key in ("open", "high", "low", "close"))
+        ]
+
 
 ADAPTERS = {"alpaca": AlpacaAdapter, "oanda": OandaAdapter, "tradier": TradierAdapter}
 
 
+def _aggregate_candles(candles: list[dict], hours: int):
+    buckets: dict[datetime, list[dict]] = {}
+    for candle in candles:
+        timestamp = datetime.fromisoformat(candle["t"].replace("Z", "+00:00")).astimezone(timezone.utc)
+        bucket = timestamp.replace(hour=(timestamp.hour // hours) * hours, minute=0, second=0, microsecond=0)
+        buckets.setdefault(bucket, []).append(candle)
+    aggregated = []
+    for timestamp, group in sorted(buckets.items()):
+        aggregated.append({
+            "t": timestamp.isoformat().replace("+00:00", "Z"),
+            "o": group[0]["o"],
+            "h": max(candle["h"] for candle in group),
+            "l": min(candle["l"] for candle in group),
+            "c": group[-1]["c"],
+        })
+    return aggregated
+
+
 def get_adapter(broker: str, credentials: dict[str, str], environment: str):
     return ADAPTERS[broker](credentials, environment)
-

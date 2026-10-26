@@ -55,7 +55,7 @@ The browser client uses Supabase's PKCE authorization-code flow, stores the resu
 
 Google sign-in authenticates the Zuri account only. It does not connect a brokerage account or grant Zuri access to trading data.
 
-The backend verifies Supabase access tokens for account, position, order, trade-execution, and AI-chat endpoints. Market news remains public. The browser-side workspace gate is for navigation; backend token verification is the security boundary. The current workspace still contains simulated account and quote data, and account onboarding does not connect a brokerage account.
+The backend verifies Supabase access tokens for account, position, order, trade-execution, market-history, scanner-setup, and AI-chat endpoints. Market news remains public. The browser-side workspace gate is for navigation; backend token verification is the security boundary. Workspace quotes remain simulated, and account onboarding does not connect a brokerage account.
 
 Account deletion is performed by the backend using the authenticated user's verified Supabase ID and the server-only `SUPABASE_SERVICE_ROLE_KEY`. It permanently removes that Supabase Auth user, and the schema's foreign keys also delete that user's profile, preferences, journal entries, and watchlist rows. Configure the backend service-role key before using **Settings → Security → Delete account**.
 
@@ -83,11 +83,17 @@ The assistant provides educational trading support and does not submit orders. I
 
 ## Market briefing
 
-The Dashboard and Charts briefing loads attributed headlines from CNBC US Top News and BBC Business/World through the backend's `GET /api/market-news` endpoint. The browser requests updates every five minutes, and the backend caches publisher feeds for five minutes. Stories include a publication time when the publisher provides one, a source label, a link to the original article, and an optional symbol match based on simple headline/excerpt keyword matching.
+The Dashboard and Charts briefing loads attributed headlines from CNBC US Top News and BBC Business/World through the backend's `GET /api/market-news` endpoint. The Charts panel separates trading coverage from relevant world stories. The browser requests updates every five minutes, and the backend caches publisher feeds for five minutes. Stories include a publication time when the publisher provides one, a source label, a link to the original article, and an optional symbol match based on simple headline/excerpt keyword matching.
 
 Use **Ask Zuri** on a story to include its title, excerpt, source, time, and link as context in the assistant conversation. Zuri treats that publisher material as untrusted input and can discuss possible relevance, not confirm causation or predict price direction. A missing feed is reported in the briefing; if all feeds are unavailable, the endpoint returns an error rather than fabricated headlines.
 
 Publisher RSS reuse, attribution, and commercial-use terms have not been cleared for production. Review each publisher's current terms and obtain any required permissions before deploying this feed commercially. The current three-feed set is an initial briefing, not comprehensive real-time financial news.
+
+## Chart scanners and historical reviews
+
+The Charts workspace lets Zuri draft a simple breakout, moving-average-cross, or RSI-level scanner from a user prompt. Review the generated condition before activation. Active scanners request authenticated candles from the user's linked broker once per minute while the Zuri app is open and visible; they pause when the page is hidden and stop when the app is closed or reloaded. Scanner setups are session-only, are limited to five, and do not submit orders.
+
+Historical reviews use `GET /api/market-history` and candles returned by the selected broker adapter; they do not fall back to workspace demo quotes. Users choose a symbol, timeframe, custom date range (up to five years), signal rule, and fixed holding period. The result enters at the next candle's open and compares the close after the selected number of candles. The optional event label is only a note: news and economic events are not automatically aligned to historical timestamps. Provider history, asset coverage, candle limits, and timeframes vary; unsupported data is reported by the broker endpoint. Results are historical signal examples, not simulated fills, and exclude trading costs, slippage, and spreads.
 
 ## Linking live broker accounts
 
@@ -97,7 +103,7 @@ Settings → Broker lets each user link their own **Alpaca**, **OANDA** or **Tra
 2. Set `BROKER_ENCRYPTION_KEY` (see `backend/.env.example`) and `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env`, and `pip install cryptography` in the backend environment.
 3. Credentials are validated against the broker, encrypted (Fernet) and stored per user in a table that browsers cannot read. They are never sent back to the frontend.
 4. Orders need an explicit confirmation checkbox; live orders additionally require typing `CONFIRM LIVE`.
-5. The dashboard, Trade ticket, positions, status bar and Zuri assistant all use your linked broker account (the first one linked, via `GET /api/account`). The assistant gets a read-only snapshot of equity, cash and positions; it still cannot place orders. Quotes, charts and History remain simulated demo data. The global `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` env vars are no longer used.
+5. The dashboard, Trade ticket, positions, status bar and Zuri assistant all use your linked broker account (the first one linked, via `GET /api/account`). The assistant gets a read-only snapshot of equity, cash and positions; it still cannot place orders. Workspace quote-strip values remain demo data; the embedded chart uses TradingView's feed, and History and chart research request data from the linked broker. The global `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` env vars are no longer used.
 
 OAuth (Alpaca Connect, Tradier, Coinbase), Interactive Brokers and Binance/Coinbase are not implemented yet: OAuth needs Zuri to be registered as an app with each broker, and IBKR needs its Client Portal gateway.
 

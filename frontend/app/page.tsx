@@ -7,6 +7,7 @@ import { HistoryView } from "./history-view";
 import { CommunityPanel, CoachingPanel } from "./dashboard-insights";
 import { TradeConversation } from "./trade-conversation";
 import { SnapshotGallery, captureScreenForTrade } from "./trade-snapshots";
+import { ChartResearch } from "./chart-research";
 import { backendUrl, formatMoney, useLinkedAccount, type LinkedAccountState, type LinkedPosition } from "./linked-account";
 import {
   addJournalEntry,
@@ -33,8 +34,9 @@ import { draftJournalNote, JournalInsights, trackJourneyEvent } from "./journal-
 type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
 type SettingsTab = "Account" | "Broker" | "Trading" | "Risk" | "Platform" | "Display" | "Notifications" | "Security";
 type Instrument = { symbol: string; name: string; price: string; change: string; up: boolean; icon: string; group: string; tickDirection?: "up" | "down"; tickSequence?: number };
-type MarketNewsArticle = { id: string; title: string; summary: string; source: string; published_at: string | null; url: string; related_symbols: string[]; market_wide: boolean };
+type MarketNewsArticle = { id: string; title: string; summary: string; source: string; published_at: string | null; url: string; related_symbols: string[]; market_wide: boolean; category: "trading" | "world" };
 type MarketNewsResponse = { articles: MarketNewsArticle[]; fetched_at: string; refresh_after_seconds: number; sources: string[]; warnings: string[] };
+type BacktestNewsContext = { title: string; published_at: string | null };
 
 const initialInstruments: Instrument[] = [
   { symbol: "BTCUSD", name: "Bitcoin / U.S. Dollar", price: "85,890", change: "+1.22%", up: true, icon: "₿", group: "Crypto" },
@@ -158,6 +160,7 @@ function TradingWorkspace() {
   const [marketNewsError, setMarketNewsError] = useState("");
   const [marketNewsRefresh, setMarketNewsRefresh] = useState(0);
   const [assistantNewsRequest, setAssistantNewsRequest] = useState<{ article: MarketNewsArticle } | null>(null);
+  const [backtestNewsContext, setBacktestNewsContext] = useState<BacktestNewsContext | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantDraft, setAssistantDraft] = useState("");
   const [journey, setJourney] = useState<ZuriJourney | null>(null);
@@ -306,6 +309,11 @@ function TradingWorkspace() {
     setAssistantOpen(true);
   };
 
+  const useNewsForBacktest = (article: MarketNewsArticle) => {
+    setBacktestNewsContext({ title: article.title, published_at: article.published_at });
+    setSection("Charts");
+  };
+
   const saveJournalEntry = async (entry: Omit<JournalEntry, "id" | "createdAt" | "source">) => {
     if (!session?.user.id) return;
     try {
@@ -430,6 +438,16 @@ function TradingWorkspace() {
             setTimeframe(preferences.default_timeframe);
             if (watchlistSymbols.includes(preferences.default_symbol)) setSelectedSymbol(preferences.default_symbol);
           }} />}
+          {session && workspaceDataUserId === session.user.id && <ChartResearch
+            symbol={symbol.symbol}
+            timeframe={timeframe}
+            broker={linkedAccount.data?.broker ?? ""}
+            token={accessToken}
+            userId={session.user.id}
+            eventContext={backtestNewsContext}
+            onClearEventContext={() => setBacktestNewsContext(null)}
+            visible={section === "Charts"}
+          />}
           </>}
         </div>
         {section !== "Settings" && <aside className={watchlistOpen ? "right-rail" : "right-rail collapsed"}>
@@ -500,6 +518,7 @@ function TradingWorkspace() {
               error={marketNewsError}
               onRefresh={() => setMarketNewsRefresh((value) => value + 1)}
               onAskAboutStory={askZuriAboutNews}
+              onBacktestStory={useNewsForBacktest}
             />
           </>}
         </aside>}
@@ -770,6 +789,7 @@ function MarketNewsSection({
   error,
   onRefresh,
   onAskAboutStory,
+  onBacktestStory,
 }: {
   variant: "charts" | "dashboard";
   symbol?: string;
@@ -778,9 +798,12 @@ function MarketNewsSection({
   error: string;
   onRefresh: () => void;
   onAskAboutStory: (article: MarketNewsArticle) => void;
+  onBacktestStory?: (article: MarketNewsArticle) => void;
 }) {
+  const [newsCategory, setNewsCategory] = useState<"trading" | "world">("trading");
   const visibleArticles = (news?.articles ?? [])
-    .filter((article) => variant === "dashboard" || article.market_wide || article.related_symbols.includes(symbol ?? ""))
+    .filter((article) => variant === "dashboard"
+      || (article.category === newsCategory && (article.market_wide || article.related_symbols.includes(symbol ?? ""))))
     .slice(0, variant === "dashboard" ? 8 : 6);
 
   return (
@@ -788,17 +811,21 @@ function MarketNewsSection({
       <div className="market-news-heading">
         <div>
           <span className="small-label">ZURI MARKET INTELLIGENCE</span>
-          <h2 id={`market-news-title-${variant}`}>{variant === "charts" ? `${symbol} & global briefing` : "Global & watchlist briefing"}</h2>
-          <p>External events and reporting that may matter to your markets.</p>
+          <h2 id={`market-news-title-${variant}`}>{variant === "charts" ? `You should know · ${symbol}` : "Global & watchlist briefing"}</h2>
+          <p>{variant === "charts" ? "Trading headlines and relevant world events, with source links." : "External events and reporting that may matter to your markets."}</p>
         </div>
         <button className="news-refresh" type="button" onClick={onRefresh} disabled={loading} aria-label="Refresh market news" title="Refresh market news">↻</button>
       </div>
+      {variant === "charts" && <div className="market-news-tabs" role="tablist" aria-label="Briefing category">
+        <button type="button" role="tab" aria-selected={newsCategory === "trading"} className={newsCategory === "trading" ? "active" : ""} onClick={() => setNewsCategory("trading")}>Trading world</button>
+        <button type="button" role="tab" aria-selected={newsCategory === "world"} className={newsCategory === "world" ? "active" : ""} onClick={() => setNewsCategory("world")}>Relevant world news</button>
+      </div>}
       {news?.warnings.length ? <p className="market-news-warning">Some sources are temporarily unavailable: {news.warnings.join(", ")}.</p> : null}
       {error && !news ? <div className="market-news-state error" role="alert">{error}</div> : null}
       {error && news ? <p className="market-news-warning" role="status">Could not refresh the briefing; showing previously loaded stories. {error}</p> : null}
       {loading && !news ? <div className="market-news-state">Loading current headlines from the news sources…</div> : null}
       {!loading && !error && visibleArticles.length === 0 ? (
-        <div className="market-news-state">No matching recent headlines were found. Try refreshing later.</div>
+        <div className="market-news-state">No matching recent headlines were found in this category. Try refreshing later.</div>
       ) : null}
       <div className="market-news-list">
         {visibleArticles.map((article) => (
@@ -817,6 +844,7 @@ function MarketNewsSection({
             {article.summary && <p>{article.summary}</p>}
             <div className="market-news-actions">
               <button type="button" onClick={() => onAskAboutStory(article)}>Ask Zuri what this could mean →</button>
+              {variant === "charts" && onBacktestStory && <button type="button" onClick={() => onBacktestStory(article)}>Use for backtest</button>}
               <a href={article.url} target="_blank" rel="noreferrer" aria-label={`Read source article: ${article.title}`}>Read source ↗</a>
             </div>
           </article>

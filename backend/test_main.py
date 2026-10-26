@@ -23,9 +23,13 @@ class AuthenticationTests(unittest.TestCase):
         self.app.dependency_overrides.pop(self.require_authenticated_user, None)
 
         response = self.client.get("/api/account")
+        history_response = self.client.get(
+            "/api/market-history?symbol=AAPL&timeframe=1D&start=2026-01-01T00:00:00Z&end=2026-01-02T00:00:00Z"
+        )
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["detail"], "Sign in to use this endpoint.")
+        self.assertEqual(history_response.status_code, 401)
 
     def test_account_deletion_rejects_unauthenticated_requests(self):
         self.app.dependency_overrides.pop(self.require_authenticated_user, None)
@@ -308,6 +312,7 @@ class MarketNewsTests(unittest.TestCase):
         articles = response.json()["articles"]
         self.assertEqual([article["id"] for article in articles], ["apple", "macro"])
         self.assertEqual(articles[0]["related_symbols"], ["AAPL"])
+        self.assertEqual(articles[0]["category"], "trading")
         self.assertTrue(articles[1]["market_wide"])
 
     def test_news_endpoint_rejects_invalid_symbol_filters(self):
@@ -340,6 +345,7 @@ class MarketNewsTests(unittest.TestCase):
         self.assertIsNone(warning)
         self.assertEqual(len(articles), 1)
         self.assertEqual(articles[0]["source"], "CNBC")
+        self.assertEqual(articles[0]["category"], "trading")
         self.assertEqual(articles[0]["summary"], "Investors weigh the outlook.")
         self.assertEqual(articles[0]["published_at"], "2026-10-16T08:00:00Z")
 
@@ -501,6 +507,157 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(len(body["round_trips"]), 1)
         self.assertEqual(body["round_trips"][0]["realized_pl"], 40.0)
         self.assertEqual(body["round_trips"][0]["quantity"], 4)
+
+
+class ChartResearchTests(unittest.TestCase):
+    def setUp(self):
+        from backend.main import app, require_authenticated_user
+
+        self.app = app
+        self.client = TestClient(app)
+        self.require_authenticated_user = require_authenticated_user
+        app.dependency_overrides[require_authenticated_user] = lambda: {"id": "test-user"}
+        capture = patch("backend.main._capture_trade")
+        capture.start()
+        self.addCleanup(capture.stop)
+
+    def tearDown(self):
+        self.app.dependency_overrides.pop(self.require_authenticated_user, None)
+
+    @patch("backend.main._active_connection")
+    def test_market_history_uses_the_authenticated_users_broker_and_normalizes_oanda_pairs(self, active_connection):
+        bars = [{"t": "2026-01-01T00:00:00Z", "o": 1.1, "h": 1.2, "l": 1.0, "c": 1.15}]
+        adapter = SimpleNamespace(historical_candles=lambda *args: bars)
+        active_connection.return_value = ({"broker": "oanda"}, adapter)
+
+        response = self.client.get(
+            "/api/market-history?symbol=EURUSD&timeframe=1h&start=2026-01-01T00:00:00Z&end=2026-01-02T00:00:00Z"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["symbol"], "EUR_USD")
+        self.assertEqual(response.json()["bars"], bars)
+        self.assertFalse(response.json()["truncated"])
+        active_connection.assert_called_once_with("test-user", None)
+
+    @patch("backend.main._active_connection")
+    def test_market_history_rejects_invalid_ranges_before_fetching(self, active_connection):
+        response = self.client.get(
+            "/api/market-history?symbol=AAPL&timeframe=1D&start=2026-01-03T00:00:00Z&end=2026-01-02T00:00:00Z"
+        )
+
+        self.assertEqual(response.status_code, 400)
+        active_connection.assert_not_called()
+
+    @patch("backend.main._active_connection")
+    def test_market_history_rejects_unsupported_symbols(self, active_connection):
+        adapter = SimpleNamespace(historical_candles=lambda *args: [])
+        active_connection.return_value = ({"broker": "oanda"}, adapter)
+
+        response = self.client.get(
+            "/api/market-history?symbol=EUR_USD%2FUSD&timeframe=1D&start=2026-01-01T00:00:00Z&end=2026-01-02T00:00:00Z"
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    @patch("backend.brokers._request")
+    def test_alpaca_aggregates_historical_hourly_bars_for_four_hour_reviews(self, request):
+        from datetime import datetime, timezone
+        from backend.brokers import AlpacaAdapter
+
+        request.return_value = {
+            "bars": [
+                {"t": f"2026-01-01T0{hour}:00:00Z", "o": 10 + hour, "h": 12 + hour, "l": 9 + hour, "c": 11 + hour}
+                for hour in range(4)
+            ],
+            "next_page_token": None,
+        }
+        adapter = AlpacaAdapter({"api_key": "test-key", "api_secret": "test-secret"}, "paper")
+
+        result = adapter.historical_candles(
+            "AAPL", "4h",
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0], {"t": "2026-01-01T00:00:00Z", "o": 10, "h": 15, "l": 9, "c": 14})
+        self.assertEqual(request.call_args.kwargs["params"]["timeframe"], "1Hour")
+
+    @patch("backend.brokers._request")
+    def test_oanda_historical_candles_parse_mid_prices(self, request):
+        from datetime import datetime, timezone
+        from backend.brokers import OandaAdapter
+
+        request.return_value = {
+            "candles": [{
+                "time": "2026-01-01T00:00:00Z",
+                "mid": {"o": "1.1", "h": "1.2", "l": "1.0", "c": "1.15"},
+            }],
+        }
+        adapter = OandaAdapter({"api_token": "test-token", "account_id": "123"}, "paper")
+
+        result = adapter.historical_candles(
+            "EUR_USD", "1h",
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(result[0]["c"], 1.15)
+        self.assertEqual(request.call_args.kwargs["params"]["granularity"], "H1")
+
+    @patch("backend.brokers._request")
+    def test_tradier_daily_history_returns_numeric_candles(self, request):
+        from datetime import datetime, timezone
+        from backend.brokers import TradierAdapter
+
+        request.return_value = {
+            "history": {"day": {"date": "2026-01-01", "open": "10.0", "high": "12.0", "low": "9.0", "close": "11.5"}},
+        }
+        adapter = TradierAdapter({"access_token": "test-token", "account_id": "123"}, "paper")
+
+        result = adapter.historical_candles(
+            "AAPL", "1D",
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(result[0], {"t": "2026-01-01", "o": 10.0, "h": 12.0, "l": 9.0, "c": 11.5})
+
+    @patch("backend.main.get_groq_client")
+    def test_ai_scanner_configuration_returns_a_validated_rule(self, get_client):
+        from backend.main import ScannerDefinition
+
+        content = '{"name":"20-candle breakout","condition":"breakout","direction":"up","lookback":20}'
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+        get_client.return_value = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: completion))
+        )
+
+        response = self.client.post(
+            "/api/scanners/configure",
+            json={"prompt": "Find a close above the last 20 candles", "symbol": "AAPL", "timeframe": "1h"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        scanner = response.json()["scanner"]
+        self.assertEqual(scanner["symbol"], "AAPL")
+        self.assertEqual(scanner["condition"], "breakout")
+        self.assertIsInstance(ScannerDefinition.model_validate(scanner), ScannerDefinition)
+
+    @patch("backend.main.get_groq_client")
+    def test_ai_scanner_configuration_rejects_invalid_model_output(self, get_client):
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"condition":"send_trade"}'))])
+        get_client.return_value = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: completion))
+        )
+
+        response = self.client.post(
+            "/api/scanners/configure",
+            json={"prompt": "Make a scanner", "symbol": "AAPL", "timeframe": "1h"},
+        )
+
+        self.assertEqual(response.status_code, 502)
 
     def test_position_sizing_is_exact_and_capped(self):
         from backend import sizing
