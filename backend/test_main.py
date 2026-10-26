@@ -122,6 +122,12 @@ class AssistantChatTests(unittest.TestCase):
         journey_patcher = patch("backend.main.get_zuri_journey", return_value=None)
         journey_patcher.start()
         self.addCleanup(journey_patcher.stop)
+        remember_patcher = patch("backend.main.remember_exchange")
+        remember_patcher.start()
+        self.addCleanup(remember_patcher.stop)
+        snapshot_patcher = patch("backend.main.build_journey_snapshot", return_value={})
+        snapshot_patcher.start()
+        self.addCleanup(snapshot_patcher.stop)
 
     def tearDown(self):
         from backend.main import require_authenticated_user
@@ -188,6 +194,7 @@ class AssistantChatTests(unittest.TestCase):
     @patch("backend.main.get_groq_client")
     def test_chat_includes_selected_news_as_untrusted_source_context(self, get_client):
         from backend.main import AssistantChatRequest, chat_with_assistant
+        from fastapi import BackgroundTasks
 
         get_client.return_value.chat.completions.create.return_value = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="The excerpt reports a rate decision."))]
@@ -209,7 +216,7 @@ class AssistantChatTests(unittest.TestCase):
         })
 
         with patch("backend.main.get_user_profile_traits", return_value=([], None)):
-            result = chat_with_assistant(request, {"id": "test-user"}, "Bearer test-token")
+            result = chat_with_assistant(request, BackgroundTasks(), {"id": "test-user"}, "Bearer test-token")
 
         self.assertEqual(result["reply"], "The excerpt reports a rate decision.")
         prompt = get_client.return_value.chat.completions.create.call_args.kwargs["messages"][0]["content"]

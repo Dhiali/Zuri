@@ -11,9 +11,11 @@ import {
   useSyncExternalStore,
 } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import type { Session } from "@supabase/supabase-js";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "./supabase";
 import { saveUserProfile } from "./user-data";
+import { IntroVisual } from "./intro-visuals";
 
 type AuthStatus = "loading" | "intro" | "welcome" | "sign-in" | "sign-up" | "set-password" | "onboarding" | "workspace" | "reset-password";
 type Experience = "New to trading" | "Learning the basics" | "Experienced";
@@ -24,22 +26,22 @@ const MIN_SPLASH_DURATION_MS = 3200;
 const INTRO_COMPLETED_STORAGE_KEY = "zuri-product-intro-completed";
 const introSteps = [
   {
-    eyebrow: "A CLEARER VIEW",
-    title: "See your market in context.",
-    body: "Bring charts, a focused watchlist, and market headlines together in one workspace, so you can explore what matters without the noise.",
-    note: "Quotes and account figures in the current workspace are simulated.",
+    eyebrow: "YOUR TRADING EXPERT",
+    title: "Ask Zuri, your trading expert assistant.",
+    body: "Any question about markets, any time. Get a clear answer in seconds.",
+    note: "",
   },
   {
-    eyebrow: "A MORE THOUGHTFUL PROCESS",
-    title: "Make a plan before a trade.",
-    body: "Use your journal to capture ideas and review decisions. Keep your risk in view and build a routine that works for you.",
-    note: "Zuri is a learning and planning workspace, not a broker connection.",
+    eyebrow: "PRACTICE WITHOUT RISK",
+    title: "Test every idea before it costs you.",
+    body: "Run any strategy in a $10,000 practice account and see the result before real money is involved.",
+    note: "",
   },
   {
-    eyebrow: "PERSPECTIVE, NOT PROMISES",
-    title: "Learn with context, not signals.",
-    body: "Ask Zuri to help you think through a chart or a headline. It can offer educational context, but it cannot predict markets or guarantee results.",
-    note: "Zuri does not submit trades. You remain in control of every decision.",
+    eyebrow: "YOUR AI TRADING PARTNER",
+    title: "From sign-up to your first trade in minutes.",
+    body: "Your practice desk, your expert assistant and your first plan are all waiting. Free to start.",
+    note: "",
   },
 ];
 
@@ -128,6 +130,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
   const [introStep, setIntroStep] = useState(0);
   const [experience, setExperience] = useState<Experience | null>(null);
   const [markets, setMarkets] = useState<Market[]>([]);
+  const [marketsUnsure, setMarketsUnsure] = useState(false);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -152,7 +155,12 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
     void supabase.auth.getSession().then(({ data, error: sessionError }) => {
       if (!active || authEventReceived) return;
       if (sessionError) {
-        setError(sessionError.message);
+        if (/refresh token/i.test(sessionError.message)) {
+          void supabase.auth.signOut({ scope: "local" });
+          setSession(null);
+        } else {
+          setError(sessionError.message);
+        }
         setStatus("welcome");
         return;
       }
@@ -217,7 +225,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
     },
   }), [session]);
 
-  const continueFromIntro = (nextStatus: "welcome" | "sign-in") => {
+  const continueFromIntro = (nextStatus: "welcome" | "sign-in" | "sign-up") => {
     try {
       window.localStorage.setItem(INTRO_COMPLETED_STORAGE_KEY, "true");
       window.dispatchEvent(new Event("zuri-product-intro-change"));
@@ -364,6 +372,18 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
     }
   };
 
+  const startOver = async () => {
+    setError("");
+    setAccountPassword("");
+    setConfirmAccountPassword("");
+    try {
+      await contextValue.signOut();
+      setStatus("welcome");
+    } catch (signOutError) {
+      setError(signOutError instanceof Error ? signOutError.message : "Unable to sign out. Please try again.");
+    }
+  };
+
   const createAccountPassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
@@ -385,13 +405,29 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
 
     setBusy(true);
     try {
-      const { error: updateError } = await supabase.auth.updateUser({
-        password: accountPassword,
-        data: { password_created: true },
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8000"}/api/user/password`, {
+        method: "POST",
+        headers: { Authorization: "Bearer " + session.access_token, "Content-Type": "application/json" },
+        body: JSON.stringify({ password: accountPassword }),
       });
-      if (updateError) throw updateError;
-      const { data, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError) throw sessionError;
+      if (response.status === 401) {
+        await supabase.auth.signOut({ scope: "local" });
+        setSession(null);
+        setStatus("sign-in");
+        setMessage("Your session expired. If you already created a password, sign in with your email and that password. Otherwise, continue with Google again.");
+        return;
+      }
+      if (!response.ok) {
+        let detail = "";
+        try {
+          detail = ((await response.json()) as { detail?: string }).detail ?? "";
+        } catch {}
+        throw new Error(detail || "Unable to create your password. Please try again.");
+      }
+      const email = session.user.email;
+      if (!email) throw new Error("Your password was created. Please sign in with your email and new password.");
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password: accountPassword });
+      if (signInError) throw new Error("Your password was created. Please sign in with your email and new password.");
       setSession(data.session);
       setStatus(statusForSession(data.session));
       setAccountPassword("");
@@ -410,8 +446,8 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
       setError("Choose where you are in your trading journey to continue.");
       return;
     }
-    if (markets.length === 0) {
-      setError("Choose at least one market to personalize your workspace.");
+    if (markets.length === 0 && !marketsUnsure) {
+      setError("Choose at least one market, or select \"I'm not sure yet\".");
       return;
     }
 
@@ -502,44 +538,48 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
       ) : (
         <main className="auth-shell">
           <header className="auth-topbar">
-            <Link className="auth-brand" href="/" aria-label="Zuri home"><span className="auth-mark">z</span><span>zuri<span>.</span></span></Link>
+            <Link className="auth-brand" href="/" aria-label="Zuri home"><Image src="/zuri-logo.jpg" alt="" width={768} height={768} priority /><span>zuri<span className="auth-brand-dot">.</span></span></Link>
             {visibleStatus === "intro" ? (
               <div className="auth-top-actions"><span>Already have an account?</span><button type="button" className="auth-text-button" onClick={() => continueFromIntro("sign-in")}>Sign in</button></div>
             ) : visibleStatus === "welcome" ? (
               <div className="auth-top-actions"><span>Already have an account?</span><button type="button" className="auth-text-button" onClick={() => switchStatus("sign-in")}>Sign in</button></div>
-            ) : visibleStatus === "onboarding" || visibleStatus === "set-password" ? null : (
+            ) : visibleStatus === "onboarding" ? null : visibleStatus === "set-password" ? (
+              <button type="button" className="auth-text-button" onClick={() => void startOver()}>Start over</button>
+            ) : (
               <button type="button" className="auth-text-button" onClick={() => switchStatus("welcome")}>Back to home</button>
             )}
           </header>
 
           {visibleStatus === "intro" ? (
-            <main className="auth-intro">
-              <div className="auth-intro-heading">
-                <span className="auth-eyebrow"><i /> A QUICK INTRODUCTION</span>
-                <h1>Meet your market, <em>with purpose.</em></h1>
-                <p>A few things to know about what Zuri does—and what it doesn’t.</p>
-              </div>
-              <section className="auth-intro-card" aria-live="polite">
-                <div className="auth-intro-step"><span>{String(introStep + 1).padStart(2, "0")}</span><span>{introSteps[introStep].eyebrow}</span></div>
-                <h2>{introSteps[introStep].title}</h2>
-                <p>{introSteps[introStep].body}</p>
-                <div className="auth-intro-note"><span aria-hidden="true">✳</span>{introSteps[introStep].note}</div>
-                <div className="auth-intro-footer">
-                  <div className="auth-intro-dots" aria-label={`Step ${introStep + 1} of ${introSteps.length}`}>
-                    {introSteps.map((step, index) => (
-                      <button key={step.eyebrow} type="button" aria-label={`Go to introduction step ${index + 1}`} aria-current={index === introStep ? "step" : undefined} onClick={() => setIntroStep(index)} />
-                    ))}
-                  </div>
-                  <div className="auth-intro-actions">
-                    <button type="button" className="auth-intro-skip" onClick={() => continueFromIntro("welcome")}>Skip intro</button>
-                    {introStep > 0 && <button type="button" className="auth-secondary auth-intro-back" onClick={() => setIntroStep((current) => current - 1)}>Back</button>}
-                    <button type="button" className="auth-submit auth-intro-next" onClick={() => introStep === introSteps.length - 1 ? continueFromIntro("welcome") : setIntroStep((current) => current + 1)}>
-                      {introStep === introSteps.length - 1 ? "Continue to Zuri" : "Next"} <span>→</span>
-                    </button>
+            <main className="auth-intro" aria-live="polite">
+              <div className="auth-intro-progress" aria-hidden="true"><i style={{ width: `${((introStep + 1) / introSteps.length) * 100}%` }} /></div>
+              <div className="auth-intro-stage">
+                <div className="auth-intro-copy">
+                  <div className="auth-intro-step-copy" key={introStep}>
+                    <h1>{introSteps[introStep].title}</h1>
+                    <p>{introSteps[introStep].body}</p>
                   </div>
                 </div>
-                {error && <div className="auth-error" role="alert">{error}</div>}
-              </section>
+                <div className="auth-intro-visual" key={introStep}>
+                  <IntroVisual step={introStep} />
+                </div>
+              </div>
+              <div className="auth-intro-footer">
+                <div className="auth-intro-dots" aria-label={`Step ${introStep + 1} of ${introSteps.length}`}>
+                  {introSteps.map((step, index) => (
+                    <button key={step.eyebrow} type="button" aria-label={`Go to introduction step ${index + 1}`} aria-current={index === introStep ? "step" : undefined} onClick={() => setIntroStep(index)} />
+                  ))}
+                </div>
+                <div className="auth-intro-actions">
+                  {introStep < introSteps.length - 1 && <button type="button" className="auth-intro-skip" onClick={() => continueFromIntro("sign-up")}>Skip</button>}
+                  {introStep > 0 && <button type="button" className="auth-secondary auth-intro-back" onClick={() => setIntroStep((current) => current - 1)}>Back</button>}
+                  <button type="button" className="auth-submit auth-intro-next" onClick={() => introStep === introSteps.length - 1 ? continueFromIntro("sign-up") : setIntroStep((current) => current + 1)}>
+                    {introStep === introSteps.length - 1 ? "Create my free account" : "Next"} <span>→</span>
+                  </button>
+                </div>
+              </div>
+              {introStep === introSteps.length - 1 && <p className="auth-intro-trust">Free to join · No card needed · Practice money only</p>}
+              {error && <div className="auth-error" role="alert">{error}</div>}
             </main>
           ) : (
           <div className={`auth-content ${visibleStatus === "welcome" ? "welcome-content" : ""}`}>
@@ -583,10 +623,11 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                   <p>Create a password to continue. You can use it to sign in with your email as well as Google.</p>
                   {error && <div className="auth-error" role="alert">{error}</div>}
                   <form className="auth-form" onSubmit={createAccountPassword}>
-                    <label>Password<input type="password" autoComplete="new-password" value={accountPassword} onChange={(event) => setAccountPassword(event.target.value)} minLength={8} required /></label>
-                    <label>Confirm password<input type="password" autoComplete="new-password" value={confirmAccountPassword} onChange={(event) => setConfirmAccountPassword(event.target.value)} minLength={8} required /></label>
+                    <label>Password<PasswordInput autoComplete="new-password" value={accountPassword} onChange={setAccountPassword} minLength={8} /></label>
+                    <label>Confirm password<PasswordInput autoComplete="new-password" value={confirmAccountPassword} onChange={setConfirmAccountPassword} minLength={8} /></label>
                     <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Creating password…" : "Create password"} <span>→</span></button>
                   </form>
+                  <div className="auth-switch">Wrong account? <button type="button" onClick={() => void startOver()}>Start over</button></div>
                 </>
               )}
 
@@ -601,7 +642,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                   <div className="auth-divider"><span>or continue with email</span></div>
                   <form className="auth-form" onSubmit={handleAuth}>
                     <label>Email address<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required /></label>
-                    <label>Password<input type="password" autoComplete={visibleStatus === "sign-up" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={visibleStatus === "sign-up" ? "At least 8 characters" : "Your password"} minLength={visibleStatus === "sign-up" ? 8 : undefined} required /></label>
+                    <label>Password<PasswordInput autoComplete={visibleStatus === "sign-up" ? "new-password" : "current-password"} value={password} onChange={setPassword} placeholder={visibleStatus === "sign-up" ? "At least 8 characters" : "Your password"} minLength={visibleStatus === "sign-up" ? 8 : undefined} /></label>
                     {visibleStatus === "sign-in" && <button type="button" className="auth-forgot" disabled={busy} onClick={() => void sendPasswordReset()}>Forgot password?</button>}
                     <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Please wait…" : visibleStatus === "sign-up" ? "Create account" : "Sign in"} <span>→</span></button>
                   </form>
@@ -617,7 +658,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                   <p>Make it at least 8 characters. You can sign in with it next time.</p>
                   {error && <div className="auth-error" role="alert">{error}</div>}
                   <form className="auth-form" onSubmit={updatePassword}>
-                    <label>New password<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} required /></label>
+                    <label>New password<PasswordInput autoComplete="new-password" value={password} onChange={setPassword} minLength={8} /></label>
                     <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Updating…" : "Update password"} <span>→</span></button>
                   </form>
                 </>
@@ -631,7 +672,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                   <form className="auth-form onboarding-form" onSubmit={finishOnboarding}>
                     <label>What should we call you?<input type="text" autoComplete="given-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name (optional)" maxLength={60} /></label>
                     <fieldset><legend>Where are you in your trading journey? <small>Required</small></legend><div className="auth-choice-grid">{(["New to trading", "Learning the basics", "Experienced"] as Experience[]).map((option) => <button key={option} type="button" aria-pressed={experience === option} className={experience === option ? "auth-choice selected" : "auth-choice"} onClick={() => setExperience(option)}>{option}</button>)}</div></fieldset>
-                    <fieldset><legend>Which markets interest you? <small>Choose at least one</small></legend><div className="auth-choice-grid markets">{(["Stocks", "Crypto", "Forex", "Commodities"] as Market[]).map((market) => <button key={market} type="button" aria-pressed={markets.includes(market)} className={markets.includes(market) ? "auth-choice selected" : "auth-choice"} onClick={() => setMarkets((current) => current.includes(market) ? current.filter((item) => item !== market) : [...current, market])}>{market}</button>)}</div></fieldset>
+                    <fieldset><legend>Which markets interest you? <small>Choose at least one, or tell us you&apos;re not sure</small></legend><div className="auth-choice-grid markets">{(["Stocks", "Crypto", "Forex", "Commodities"] as Market[]).map((market) => <button key={market} type="button" aria-pressed={markets.includes(market)} className={markets.includes(market) ? "auth-choice selected" : "auth-choice"} onClick={() => { setMarketsUnsure(false); setMarkets((current) => current.includes(market) ? current.filter((item) => item !== market) : [...current, market]); }}>{market}</button>)}<button type="button" aria-pressed={marketsUnsure} className={marketsUnsure ? "auth-choice selected" : "auth-choice"} onClick={() => { setMarkets([]); setMarketsUnsure((current) => !current); }}>I&apos;m not sure yet</button></div></fieldset>
                     <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Saving your desk…" : "Open my trading desk"} <span>→</span></button>
                   </form>
                   <div className="auth-fineprint">Your preferences are saved with your account and can be changed later.</div>
@@ -644,6 +685,29 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
         </main>
       )}
     </AuthContext.Provider>
+  );
+}
+
+function PasswordInput({ value, onChange, autoComplete, placeholder, minLength }: {
+  value: string;
+  onChange: (value: string) => void;
+  autoComplete: string;
+  placeholder?: string;
+  minLength?: number;
+}) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <span className="auth-password">
+      <input type={visible ? "text" : "password"} autoComplete={autoComplete} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} minLength={minLength} required />
+      <button type="button" className="auth-password-toggle" aria-label={visible ? "Hide password" : "Show password"} aria-pressed={visible} onClick={() => setVisible((current) => !current)}>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" />
+          <circle cx="12" cy="12" r="3" />
+          {visible && <path d="M4 4l16 16" />}
+        </svg>
+      </button>
+    </span>
   );
 }
 

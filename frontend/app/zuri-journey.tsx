@@ -1,44 +1,161 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import type { ZuriJourney, ZuriLevel, ZuriMode } from "./user-data";
 
-type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
+export type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
 type Mood = "idle" | "talking" | "celebrating";
 
-export function ZuriMascot({ mood = "idle", size = 120, emote }: { mood?: Mood; size?: number; emote?: string }) {
+export type ZuriExpression = "neutral" | "happy" | "thinking" | "surprised" | "sad";
+export type ZuriGesture = "nod" | "shake";
+
+function expressionFor(mood: Mood, emote?: string): ZuriExpression {
+  if (mood === "celebrating" || emote === "🎉" || emote === "✅") return "happy";
+  if (emote === "🤔" || emote === "🧐" || mood === "talking") return "thinking";
+  if (emote === "💪") return "sad";
+  return "neutral";
+}
+
+export function ZuriMascot({ mood = "idle", size = 120, emote, expression, gesture }: { mood?: Mood; size?: number; emote?: string; expression?: ZuriExpression; gesture?: ZuriGesture }) {
+  const look = expression ?? expressionFor(mood, emote);
   return (
-    <div className="zuri-figure" style={{ width: size, height: size * 1.3 }}>
+    <div className="zuri-figure" style={{ width: size, height: size }}>
     <i className="zuri-halo" aria-hidden="true" />
-    {emote && <span className="zuri-emote" key={emote} aria-hidden="true">{emote}</span>}
-    <svg className={`zuri-mascot zuri-${mood}`} width={size} height={size * 1.3} viewBox="0 0 120 156" role="img" aria-label="Zuri, your trading assistant">
+    <div className={`zuri-move${gesture ? ` zuri-${gesture}` : ""}`}>
+    <svg className={`zuri-mascot zuri-${mood} zuri-ex-${look}`} width={size} height={size} viewBox="0 0 120 120" role="img" aria-label="Zuri, your trading assistant">
       <defs>
-        <linearGradient id="zuri-body" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0" stopColor="#4fe0b4" />
-          <stop offset="1" stopColor="#25a982" />
+        <linearGradient id="zuri-body" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0" stopColor="#d8c3ff" />
+          <stop offset=".55" stopColor="#9a74ee" />
+          <stop offset="1" stopColor="#6b46d0" />
         </linearGradient>
+        <linearGradient id="zuri-visor" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stopColor="#201833" />
+          <stop offset="1" stopColor="#0b0813" />
+        </linearGradient>
+        <radialGradient id="zuri-eye" cx=".5" cy=".4" r=".6">
+          <stop offset="0" stopColor="#ffffff" />
+          <stop offset="1" stopColor="#cdb5ff" />
+        </radialGradient>
       </defs>
-      <line x1="60" y1="6" x2="60" y2="150" stroke="#39c99e" strokeWidth="5" strokeLinecap="round" />
-      <path d="M36 50 Q20 36 28 16" fill="none" stroke="#b995ff" strokeWidth="6" strokeLinecap="round" />
-      <path d="M84 50 Q100 36 92 16" fill="none" stroke="#b995ff" strokeWidth="6" strokeLinecap="round" />
-      <rect x="26" y="40" width="68" height="86" rx="20" fill="url(#zuri-body)" />
-      <g className="zuri-eyes">
-        <ellipse cx="46" cy="78" rx="6" ry="8" fill="#0f1415" />
-        <ellipse cx="74" cy="78" rx="6" ry="8" fill="#0f1415" />
-        <circle cx="48" cy="75" r="2" fill="#fff" />
-        <circle cx="76" cy="75" r="2" fill="#fff" />
-      </g>
-      <circle cx="37" cy="96" r="5" fill="#ff9ab8" opacity=".55" />
-      <circle cx="83" cy="96" r="5" fill="#ff9ab8" opacity=".55" />
-      <path d="M47 98 Q60 112 73 98" fill="none" stroke="#0f1415" strokeWidth="3.5" strokeLinecap="round" />
+      <rect x="1" y="49" width="9" height="24" rx="4.5" fill="#8760e0" />
+      <rect x="110" y="49" width="9" height="24" rx="4.5" fill="#8760e0" />
+      <rect x="7" y="12" width="106" height="98" rx="49" fill="url(#zuri-body)" />
+      <rect x="7.5" y="12.5" width="105" height="97" rx="48.5" fill="none" stroke="#ffffff" strokeOpacity=".3" />
+      <ellipse cx="42" cy="22" rx="22" ry="6" fill="#ffffff" opacity=".28" transform="rotate(-14 42 22)" />
+      <rect x="19" y="32" width="82" height="54" rx="27" fill="url(#zuri-visor)" />
+      <rect x="19.5" y="32.5" width="81" height="53" rx="26.5" fill="none" stroke="#ffffff" strokeOpacity=".1" />
+      {[{ cx: 43, side: "l" }, { cx: 77, side: "r" }].map(({ cx, side }) => (
+        <g key={side}>
+          <g transform={`translate(${cx} 43)`}><g className={`zuri-brow zuri-brow-${side}`}><path d="M-7 0 H7" stroke="#e6d8ff" strokeWidth="3.4" strokeLinecap="round" /></g></g>
+          <g transform={`translate(${cx} 63)`}>
+            <g className="zuri-eye">
+              <g className="zuri-blink">
+                <rect className="zuri-eye-open" x="-5" y="-10" width="10" height="20" rx="5" fill="url(#zuri-eye)" />
+                <path className="zuri-eye-happy" d="M-7 4 Q0 -9 7 4" fill="none" stroke="#f1e8ff" strokeWidth="4" strokeLinecap="round" />
+              </g>
+            </g>
+          </g>
+        </g>
+      ))}
       {mood === "celebrating" && (
-        <g className="zuri-sparkles" fill="#ffd76a">
+        <g className="zuri-sparkles" fill="#e9dcff">
           <path d="M10 40 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3z" />
           <path d="M108 30 l2.5 6 6 2.5 -6 2.5 -2.5 6 -2.5 -6 -6 -2.5 6 -2.5z" />
-          <path d="M104 110 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2z" />
         </g>
       )}
     </svg>
+    </div>
+    {emote && <span className="zuri-emote" key={emote} aria-hidden="true">{emote}</span>}
+    </div>
+  );
+}
+
+export function ZuriWelcome({ experience, accessToken, section, onFinish, onSkip }: { experience: string | undefined; accessToken: string; section: string; onFinish: () => void; onSkip: () => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const [returning, setReturning] = useState(false);
+  const [length, setLength] = useState(0);
+  const [look, setLook] = useState<ZuriExpression>("surprised");
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const place = () => {
+      const rect = document.querySelector(".zuri-top")?.getBoundingClientRect();
+      setAnchor(rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : { x: window.innerWidth - 200, y: 40 });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, []);
+
+  useEffect(() => {
+    const key = "zuri-welcome-visits";
+    const previous = Number(window.localStorage.getItem(key) ?? "0") || 0;
+    window.localStorage.setItem(key, String(previous + 1));
+    const isReturning = previous > 0;
+    const fallback = isReturning
+      ? "Welcome back. I'm not sure where we left off, so we can start the lay of the land again or skip it."
+      : `Hi, I'm Zuri, your trading expert assistant. ${experience === "Experienced" ? "I'll give you a quick lay of the land" : "Since you're new to trading, I'll give you a simple but detailed lay of the land"} before we start setting things up.`;
+    const controller = new AbortController();
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8000";
+    const frame = window.requestAnimationFrame(() => setReturning(isReturning));
+    fetch(`${backendUrl}/api/zuri/greeting`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ visit: isReturning ? "returning" : "first", visit_count: previous + 1, local_hour: new Date().getHours(), section, welcome_shown_before: isReturning }),
+      signal: controller.signal,
+    })
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("greeting failed"))))
+      .then((data: { message?: string }) => setText(data.message?.trim() || fallback))
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setText(fallback);
+      });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      controller.abort();
+    };
+    // Greet once per mount; token refreshes must not trigger a new greeting.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (text === null) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const frame = window.requestAnimationFrame(() => { setLength(text.length); setLook("happy"); });
+      return () => window.cancelAnimationFrame(frame);
+    }
+    let timer: number | undefined;
+    const start = window.setTimeout(() => {
+      setLook("happy");
+      timer = window.setInterval(() => setLength((current) => (current >= text.length ? current : current + 1)), 28);
+    }, 1500);
+    return () => {
+      window.clearTimeout(start);
+      window.clearInterval(timer);
+    };
+  }, [text]);
+
+  const done = text !== null && length >= text.length;
+  const figureSize = 64;
+  const dropY = Math.round(window.innerHeight * 0.3);
+
+  return (
+    <div className="zuri-welcome" role="dialog" aria-modal="true" aria-label="Meet Zuri">
+      {anchor && (
+        <>
+          <div className="zuri-welcome-figure" style={{ left: anchor.x - figureSize / 2, top: anchor.y - figureSize / 2 + dropY }}>
+            <ZuriMascot size={figureSize} expression={text === null ? "thinking" : look} gesture={done ? "nod" : undefined} />
+          </div>
+          <div className="zuri-welcome-bubble" style={{ top: anchor.y + figureSize / 2 + 16 + dropY, right: Math.max(16, window.innerWidth - anchor.x - 28) }} aria-live="polite">
+            <span className="zuri-welcome-name">Zuri · Trading expert</span>
+            <p>{text === null ? <span className="iv-caret" aria-hidden="true" /> : <>{text.slice(0, length)}{!done && <span className="iv-caret" aria-hidden="true" />}</>}</p>
+            <div className="zuri-welcome-actions">
+              <button type="button" className="solid-button" onClick={onFinish} disabled={!done}>{returning ? "Start the lay of the land" : "Show me the lay of the land"}</button>
+              <button type="button" className="zuri-skip" onClick={onSkip}>Skip</button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

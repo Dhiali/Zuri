@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { useZuriAuth, ZuriAuthGate } from "./auth";
 import { BrokerConnections } from "./broker-connections";
 import { HistoryView } from "./history-view";
@@ -28,7 +29,8 @@ import {
   type UserPreferences,
   type ZuriJourney,
 } from "./user-data";
-import { JourneyChecklist, ZuriJourneyOverlay } from "./zuri-journey";
+import { JourneyChecklist, ZuriMascot, ZuriWelcome } from "./zuri-journey";
+import { ZuriGuide } from "./zuri-guide";
 import { draftJournalNote, JournalInsights, trackJourneyEvent } from "./journal-insights";
 
 type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
@@ -369,10 +371,10 @@ function TradingWorkspace() {
   return (
     <main className="terminal-shell">
       <header className="topbar">
-        <a className="brand" href="#charts" onClick={() => setSection("Charts")}><span className="brand-mark">z</span><span>zuri<span className="brand-dot">.</span></span></a>
+        <a className="brand" href="#charts" onClick={() => setSection("Charts")} aria-label="Zuri home"><Image className="brand-logo" src="/zuri-logo.jpg" alt="" width={768} height={768} priority /><span>zuri<span className="brand-dot">.</span></span></a>
         <div className="top-divider" />
         <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">{linkedAccount.data ? `${linkedAccount.data.broker_name.toUpperCase()} · ${linkedAccount.data.environment === "live" ? "LIVE" : "PAPER"}` : "NO BROKER LINKED"}</span></div>
-        <div className="topbar-right"><button className="icon-action" title="Search markets" onClick={() => document.getElementById("market-search")?.focus()}>⌕</button><button className="icon-action notification" title="Notifications">♧<i /></button><span className="topbar-email">{session?.user.email}</span><button className="signout-button" onClick={async () => { try { await signOut(); } catch (signOutError) { setAccountError(signOutError instanceof Error ? signOutError.message : "Unable to sign out."); } }}>Sign out</button>{accountError && <span className="topbar-auth-error" role="alert">{accountError}</span>}</div>
+        <div className="topbar-right"><button className={`icon-action zuri-top${journey?.phase === "intro" ? " is-away" : ""}`} title="Ask Zuri" aria-label="Ask Zuri" onClick={() => setAssistantOpen(true)}><ZuriMascot size={34} /></button><button className="icon-action notification" title="Notifications">♧<i /></button><span className="topbar-email">{session?.user.email}</span><button className="signout-button" onClick={async () => { try { await signOut(); } catch (signOutError) { setAccountError(signOutError instanceof Error ? signOutError.message : "Unable to sign out."); } }}>Sign out</button>{accountError && <span className="topbar-auth-error" role="alert">{accountError}</span>}</div>
       </header>
       <div className={section === "Settings" ? "workspace settings-workspace" : "workspace"}>
         <nav className="primary-nav" aria-label="Primary navigation">
@@ -524,8 +526,11 @@ function TradingWorkspace() {
         </aside>}
       </div>
       <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>{linkedAccount.data ? (linkedAccount.data.environment === "live" ? "Live trading" : "Paper trading") : "Trading"} <b>{linkedAccount.data ? "ON" : "OFF"}</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
-      {journey && journey.phase !== "done" && (
-        <ZuriJourneyOverlay journey={journey} experience={session?.user.user_metadata?.trading_experience as string | undefined} onChange={updateJourney} setSection={setSection} />
+      {journey?.phase === "intro" && (
+        <ZuriWelcome experience={session?.user.user_metadata?.trading_experience as string | undefined} accessToken={session?.access_token ?? ""} section={section} onFinish={() => updateJourney({ ...journey, phase: "done", mode: journey.mode ?? "assistant" })} onSkip={() => updateJourney({ ...journey, phase: "done", mode: journey.mode ?? "assistant", completed_steps: [...new Set([...journey.completed_steps, "guide:skipped"])] })} />
+      )}
+      {journey?.phase === "done" && !journey.completed_steps.includes("guide:skipped") && !journey.completed_steps.includes("guide:done") && (
+        <ZuriGuide accessToken={session?.access_token ?? ""} section={section} journey={journey} onJourney={updateJourney} setSection={setSection} />
       )}
       <AuraAssistant
         section={section}

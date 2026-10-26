@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { getSupabaseBrowserClient } from "../supabase";
 
@@ -38,7 +39,7 @@ export default function EmailVerifiedPage() {
   return (
     <main className="email-verified-shell">
       <section className="email-verified-card" aria-live="polite">
-        <span className="email-verified-mark" aria-hidden="true">{state === "confirmed" ? "✓" : "z"}</span>
+        {state === "confirmed" ? <span className="email-verified-mark" aria-hidden="true">✓</span> : <Image className="email-verified-logo" src="/zuri-logo.jpg" alt="Zuri" width={768} height={768} priority />}
         {state === "checking" ? (
           <>
             <span className="auth-card-kicker">ACCOUNT VERIFICATION</span>
