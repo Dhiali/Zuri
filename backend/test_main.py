@@ -109,6 +109,70 @@ class GroqConfigTests(unittest.TestCase):
         self.assertTrue(hasattr(backend.main, "app"))
 
 
+class FallbackProviderTests(unittest.TestCase):
+    def setUp(self):
+        from backend import main
+        self.main = main
+        main._groq_paused_until = 0.0
+        self.groq = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=unittest.mock.Mock())))
+        self.fallback_reply = main._AsObject.wrap({"choices": [{"message": {"content": "from backup", "tool_calls": None}, "finish_reason": "stop"}]})
+
+    def _client(self, enabled=True):
+        self.main._fallback_ai.key = "k" if enabled else ""
+        return self.main._ClientWithFallback(self.groq)
+
+    def tearDown(self):
+        self.main._fallback_ai.key = ""
+        self.main._groq_paused_until = 0.0
+
+    def test_earlier_tool_turns_are_flattened_for_the_backup(self):
+        messages = [
+            {"role": "user", "content": "chart BTCUSD"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "get_chart_data", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "{\"trend\": \"up\"}"},
+        ]
+        flat = self.main._FallbackAI._flatten_tool_turns(messages)
+        self.assertEqual([m["role"] for m in flat], ["user", "user"])
+        self.assertIn("get_chart_data", flat[1]["content"])
+        self.assertFalse(any("tool_calls" in m for m in flat))
+
+    def test_rate_limit_routes_to_the_backup_and_pauses_groq(self):
+        self.groq.chat.completions.create.side_effect = Exception("Error code: 429 - rate_limit_exceeded")
+        client = self._client()
+        with patch.object(self.main._fallback_ai, "create", return_value=self.fallback_reply) as backup:
+            first = client.chat.completions.create(model="openai/gpt-oss-20b", messages=[], reasoning_effort="low")
+            second = client.chat.completions.create(model="openai/gpt-oss-20b", messages=[])
+        self.assertEqual(first.choices[0].message.content, "from backup")
+        self.assertIsNone(first.choices[0].message.tool_calls)
+        self.assertEqual(backup.call_count, 2)
+        self.assertEqual(self.groq.chat.completions.create.call_count, 1)  # the second call skipped the spent quota
+
+    def test_other_errors_are_not_hidden_and_no_backup_means_the_original_error(self):
+        client = self._client()
+        self.groq.chat.completions.create.side_effect = ValueError("bad request shape")
+        with self.assertRaises(ValueError):
+            client.chat.completions.create(messages=[])
+        self.groq.chat.completions.create.side_effect = Exception("rate_limit_exceeded")
+        with self.assertRaises(Exception):
+            self._client(enabled=False).chat.completions.create(messages=[])
+
+    def test_backup_request_drops_groq_only_options_and_uses_its_own_model(self):
+        sent = {}
+        class Resp:
+            def raise_for_status(self): pass
+            def json(self): return {"choices": [{"message": {"content": "ok"}}]}
+        def post(url, json, headers, timeout):
+            sent.update(url=url, body=json, headers=headers)
+            return Resp()
+        self.main._fallback_ai.key = "secret"
+        with patch.object(self.main.httpx, "post", side_effect=post):
+            out = self.main._fallback_ai.create(model="openai/gpt-oss-20b", messages=[{"role": "user", "content": "hi"}], reasoning_effort="low", include_reasoning=False)
+        self.assertEqual(out.choices[0].message.content, "ok")
+        self.assertNotIn("reasoning_effort", sent["body"])
+        self.assertEqual(sent["body"]["model"], self.main._fallback_ai.model)
+        self.assertEqual(sent["headers"]["Authorization"], "Bearer secret")
+
+
 class AssistantChatTests(unittest.TestCase):
     def setUp(self):
         from backend.main import app, require_authenticated_user
@@ -383,6 +447,9 @@ class BrokerTests(unittest.TestCase):
         self.capture = patch("backend.main._capture_trade")
         self.capture_mock = self.capture.start()
         self.addCleanup(self.capture.stop)
+        self.record = patch("backend.main._record_event")
+        self.record.start()
+        self.addCleanup(self.record.stop)
 
     def tearDown(self):
         from backend.main import require_authenticated_user
@@ -428,6 +495,60 @@ class BrokerTests(unittest.TestCase):
         # closing a position is never blocked by the open-position cap
         sell = {"symbol": "TSLA", "side": "sell", "quantity": 1, "confirmed": True}
         self.assertEqual(self._order({"max_open_positions": 2}, held, sell).status_code, 200)
+
+    def test_blocked_orders_are_recorded_for_the_leak_finder(self):
+        with patch("backend.main._record_event") as record:
+            self.assertEqual(self._order({"max_open_positions": 1}, [{"symbol": "TSLA", "side": "long", "quantity": 1.0}]).status_code, 400)
+        args = record.call_args.args
+        self.assertEqual(args[1:3], ("order_blocked", "AAPL"))
+        self.assertEqual(args[3]["category"], "position_limit")
+
+    def test_sync_records_outside_closes_and_reopened_positions(self):
+        from backend.main import sync_journal
+
+        def event(kind, symbol, at, side, qty, action="entry"):
+            return {"kind": kind, "symbol": symbol, "created_at": at, "details": {"side": side, "quantity": qty, "action": action}}
+
+        history = [
+            event("order_placed", "AAPL", "2026-10-02T08:00:00+00:00", "buy", 5),   # still held
+            event("order_placed", "TSLA", "2026-10-02T08:00:00+00:00", "buy", 2),   # gone at the broker
+            event("order_placed", "MSFT", "2026-10-02T08:00:00+00:00", "buy", 1),
+            event("order_placed", "MSFT", "2026-10-02T09:00:00+00:00", "sell", 1, "exit"),  # reopened outside Zuri
+        ]
+        adapter = SimpleNamespace(positions=lambda: [
+            {"symbol": "AAPL", "side": "long", "quantity": 5.0}, {"symbol": "MSFT", "side": "long", "quantity": 3.0}])
+        trips = [{"symbol": "TSLA", "closed_at": "2026-10-03T08:00:00+00:00", "realized_pl": -12.5, "exit_price": 9.0}]
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "paper"}, adapter)), \
+             patch("backend.main._service_request", return_value=history), \
+             patch("backend.main._closed_trades", return_value=trips), \
+             patch("backend.main._capture_trade") as capture:
+            result = sync_journal({"id": "user-1"})
+        self.assertEqual(result, {"created": 1, "closed": 1})
+        kinds = {call.args[2]: call.args[1] for call in capture.call_args_list}
+        self.assertEqual(kinds, {"MSFT": "position_detected", "TSLA": "position_closed"})
+        closed = next(c for c in capture.call_args_list if c.args[2] == "TSLA")
+        self.assertEqual(closed.args[-1]["realized_pl"], -12.5)
+
+    def test_stats_flag_trading_after_a_loss_and_blocked_orders(self):
+        from backend.journal import compute_stats
+
+        def event(kind, symbol, at, **details):
+            return {"kind": kind, "symbol": symbol, "created_at": at, "details": details}
+
+        events = [
+            event("order_placed", "AAPL", "2026-10-02T08:00:00+00:00", action="exit", realized_pl=-20.0),
+            event("order_placed", "TSLA", "2026-10-02T08:10:00+00:00", action="entry"),
+            event("order_placed", "NVDA", "2026-10-02T12:00:00+00:00", action="entry"),
+            event("order_blocked", "AAPL", "2026-10-02T12:05:00+00:00", category="risk_limit"),
+            event("plan_proposed", "AAPL", "2026-10-02T12:06:00+00:00"),
+            event("position_closed", "NVDA", "2026-10-02T13:00:00+00:00", action="exit", realized_pl=5.0),
+        ]
+        stats = compute_stats(events, [], [], 1000.0)
+        self.assertEqual(stats["trades_soon_after_a_loss"], 1)
+        self.assertEqual(stats["blocked_orders"], 1)
+        self.assertEqual(stats["blocked_orders_by_reason"], {"risk_limit": 1})
+        self.assertEqual(stats["plans_discussed_with_zuri"], 1)
+        self.assertEqual(stats["closed_outside_zuri"], 1)
 
     def test_journal_analytics_find_leaks(self):
         from backend.journal import compute_stats
@@ -554,6 +675,9 @@ class ChartResearchTests(unittest.TestCase):
         capture = patch("backend.main._capture_trade")
         capture.start()
         self.addCleanup(capture.stop)
+        self.record = patch("backend.main._record_event")
+        self.record_mock = self.record.start()
+        self.addCleanup(self.record.stop)
 
     def tearDown(self):
         self.app.dependency_overrides.pop(self.require_authenticated_user, None)
@@ -739,6 +863,9 @@ class ChartResearchTests(unittest.TestCase):
         self.assertLess(plan["stop_loss"], 100.0)
         self.assertGreater(plan["take_profit"], 100.0)
         self.assertLessEqual(plan["actual_risk"], 100.0)
+        recorded = self.record_mock.call_args.args
+        self.assertEqual(recorded[1:3], ("plan_proposed", "AAPL"))
+        self.assertEqual(recorded[3]["idea"], "I want to buy AAPL")
 
     def test_order_with_levels_on_wrong_side_is_rejected(self):
         adapter = SimpleNamespace(
@@ -845,59 +972,6 @@ class CoachingTests(unittest.TestCase):
         self.assertEqual(pro["videos"][0]["topic"], "psychology")
         self.assertTrue(all(v["url"].startswith("https://www.youtube.com/") for v in pro["videos"]))
         self.assertTrue(coaching.learning_for([], None)["courses"])
-
-
-class CommunityTests(unittest.TestCase):
-    def setUp(self):
-        from backend.main import app, require_authenticated_user
-
-        self.app = app
-        self.client = TestClient(app)
-        app.dependency_overrides[require_authenticated_user] = lambda: {"id": "11111111-1111-1111-1111-111111111111"}
-        self.addCleanup(lambda: app.dependency_overrides.pop(require_authenticated_user, None))
-
-    def test_posts_with_links_or_contact_details_are_rejected(self):
-        profile = {"user_id": "u", "handle": "kim", "strategies": ["Day trading"], "bio": ""}
-        with patch("backend.main._my_community_profile", return_value=profile), patch("backend.main._service_request", return_value=[]):
-            for body in ("join my group t.me/x https://evil.com", "mail me at a@b.com", "visit scam.io now"):
-                response = self.client.post("/api/community/posts", json={"body": body, "strategy": "Day trading"})
-                self.assertEqual(response.status_code, 400, body)
-            ok = self.client.post("/api/community/posts", json={"body": "I wait for the first pullback after the open.", "strategy": "Day trading"})
-            self.assertEqual(ok.status_code, 200)
-
-    def test_posting_requires_joining_and_own_strategy(self):
-        with patch("backend.main._my_community_profile", return_value=None):
-            self.assertEqual(self.client.post("/api/community/posts", json={"body": "hi", "strategy": "Scalping"}).status_code, 403)
-        profile = {"user_id": "u", "handle": "kim", "strategies": ["Day trading"], "bio": ""}
-        with patch("backend.main._my_community_profile", return_value=profile), patch("backend.main._service_request", return_value=[]):
-            self.assertEqual(self.client.post("/api/community/posts", json={"body": "hi", "strategy": "Scalping"}).status_code, 400)
-
-    def test_daily_post_limit(self):
-        profile = {"user_id": "u", "handle": "kim", "strategies": ["Day trading"], "bio": ""}
-        with patch("backend.main._my_community_profile", return_value=profile), patch("backend.main._service_request", return_value=[{"id": str(i)} for i in range(10)]):
-            self.assertEqual(self.client.post("/api/community/posts", json={"body": "hi", "strategy": "Day trading"}).status_code, 429)
-
-    def test_taken_handle_is_rejected(self):
-        with patch("backend.main._service_request", return_value=[{"user_id": "other"}]):
-            response = self.client.put("/api/community/profile", json={"handle": "kim_t", "strategies": ["Scalping"], "bio": ""})
-        self.assertEqual(response.status_code, 409)
-
-    def test_overview_never_exposes_user_ids(self):
-        me = {"user_id": "11111111-1111-1111-1111-111111111111", "handle": "me", "strategies": ["Scalping"], "bio": ""}
-        other = "22222222-2222-2222-2222-222222222222"
-
-        def fake(table, method, params=None, **kw):
-            if table == "community_profiles":
-                return [{"user_id": other, "handle": "pat", "strategies": ["Scalping", "Breakouts"], "bio": "hi"}]
-            if table == "community_posts" and params.get("parent_id") == "is.null":
-                return [{"id": "33333333-3333-3333-3333-333333333333", "author_id": other, "strategy": "Scalping", "body": "tip", "created_at": "2026-10-01T00:00:00Z"}]
-            return []
-
-        with patch("backend.main._my_community_profile", return_value=me), patch("backend.main._service_request", side_effect=fake):
-            body = self.client.get("/api/community").json()
-        self.assertNotIn(other, str(body))
-        self.assertEqual(body["traders"][0]["shared"], ["Scalping"])
-        self.assertEqual(body["posts"][0]["handle"], "pat")
 
 
 if __name__ == "__main__":

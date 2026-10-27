@@ -83,20 +83,21 @@ const steps: Step[] = [
   {
     id: "broker-account",
     title: "Open a free demo broker account",
-    why: "A broker is the licensed company that holds your money and actually carries out your trades. Zuri never holds funds. You connect to your broker, just like connecting MetaTrader 5 to a broker server. We’ll start with a free paper account that uses practice money, so nothing is at risk. Sign up at alpaca.markets and choose a paper account.",
+    why: "A broker is the licensed company that holds your money and carries out your trades; Zuri never holds funds. Start with a free Alpaca paper account (practice money). 1) Open https://app.alpaca.markets/signup and sign up with your email. 2) Confirm the email. 3) Make sure you're on the Paper side of the dashboard. For a click-by-click guide, press 'Do it with me' on your dashboard.",
     quick: "Create a free Alpaca paper account at alpaca.markets. It uses simulated money.",
-    action: { label: "Open Alpaca", href: "https://alpaca.markets" },
+    action: { label: "Open Alpaca sign-up", href: "https://app.alpaca.markets/signup" },
   },
   {
     id: "broker-keys",
     title: "Create your API keys",
-    why: "API keys are like a password that lets Zuri place trades for you without ever seeing your login. In Alpaca’s paper dashboard, find “API Keys” and generate a new key. You’ll get a Key ID and a Secret. The secret is shown only once, so copy it somewhere safe. Never enable withdrawals on a key.",
+    why: "API keys are like a password that lets Zuri place trades without ever seeing your login. 1) Open your Alpaca paper dashboard (https://app.alpaca.markets/paper/dashboard/overview). 2) Check the account switcher at the top left says Paper. 3) In the API Keys box on the right, click Generate New Keys. 4) Copy the Key ID and the Secret Key; the secret is shown only once. Never enable withdrawals on a key.",
     quick: "In Alpaca’s paper dashboard, generate an API key ID and secret (trading permissions only).",
+    action: { label: "Open Alpaca paper dashboard", href: "https://app.alpaca.markets/paper/dashboard/overview" },
   },
   {
     id: "broker-link",
     title: "Link your broker to Zuri",
-    why: "Paste your Key ID and Secret into Settings → Broker and choose Paper. Zuri checks them with the broker, then stores them encrypted. This is the same step you’d take to link a real-money account later.",
+    why: "In Settings → Broker, click Link account on the Alpaca row, paste the Key ID into 'API key ID' and the Secret Key into 'API secret key', leave Environment on Paper / practice, then click Verify and link. Zuri checks them with Alpaca and stores them encrypted.",
     quick: "Paste the key and secret in Settings → Broker and choose Paper.",
     action: { label: "Open Settings → Broker", section: "Settings" },
     auto: true,
@@ -133,7 +134,9 @@ export function JourneyChecklist({
   journalCount,
   onChange,
   setSection,
+  compact = false,
 }: {
+  compact?: boolean;
   journey: ZuriJourney;
   brokerLinked: boolean;
   hasPositions: boolean;
@@ -152,6 +155,17 @@ export function JourneyChecklist({
   const detailed = level === "foundations";
 
   const markDone = (id: string) => onChange({ ...journey, completed_steps: [...journey.completed_steps, id] });
+
+  if (compact) {
+    return (
+      <section className="content-card zuri-progress">
+        <span className="small-label">SETUP PROGRESS · {completedCount} OF {steps.length}</span>
+        <ol className="zuri-steps">
+          {steps.map((step) => <li key={step.id} className={done(step) ? "done" : step === next ? "current" : ""}><span>{done(step) ? "✓" : ""}</span>{step.title}</li>)}
+        </ol>
+      </section>
+    );
+  }
 
   return (
     <section className="content-card zuri-checklist">

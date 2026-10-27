@@ -71,7 +71,7 @@ export function TradeConversation({ token, symbol, riskPercent, ready, onUsePlan
   const money = (value?: number) => (typeof value === "number" ? value.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—");
 
   return (
-    <section className="content-card trade-convo">
+    <section className="content-card trade-convo" data-zuri-target="trade-convo">
       <div className="trade-convo-zuri"><ZuriMascot mood={busy ? "talking" : "idle"} size={96} emote={emote} /></div>
       <div className="trade-convo-body">
         <div><span className="small-label">TALK IT THROUGH WITH ZURI</span><h2>Brainstorm your trade</h2></div>

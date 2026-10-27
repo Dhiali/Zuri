@@ -10,8 +10,8 @@ type NextStep = { id: string; title: string } | null;
 type Action = { label: string; section?: Section; href?: string };
 
 const stepActions: Record<string, Action> = {
-  "broker-account": { label: "Open Alpaca", href: "https://alpaca.markets" },
-  "broker-keys": { label: "Open Alpaca", href: "https://alpaca.markets" },
+  "broker-account": { label: "Open Alpaca sign-up", href: "https://app.alpaca.markets/signup" },
+  "broker-keys": { label: "Open Alpaca paper dashboard", href: "https://app.alpaca.markets/paper/dashboard/overview" },
   "broker-link": { label: "Take me to Settings → Broker", section: "Settings" },
   "first-trade": { label: "Open Trade", section: "Trade" },
   "first-journal": { label: "Open Journal", section: "Journal" },

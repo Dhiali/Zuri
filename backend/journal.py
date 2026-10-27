@@ -9,8 +9,9 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-TRADE_KINDS = {"order_placed", "position_detected"}
+TRADE_KINDS = {"order_placed", "position_detected", "position_closed"}
 INTEREST_KINDS = {"watchlist_add", "symbol_viewed"}
+REVENGE_WINDOW = timedelta(minutes=30)
 
 
 def parse_time(value: str) -> datetime:
@@ -25,6 +26,23 @@ def _details(event: dict) -> dict:
 
 def _is_entry(event: dict) -> bool:
     return event["kind"] in TRADE_KINDS and _details(event).get("action", "entry") == "entry"
+
+
+def tracked_positions(events: list[dict[str, Any]]) -> tuple[dict[str, float], dict[str, datetime]]:
+    """Net signed quantity Zuri believes is open per symbol, and when each was last entered."""
+    net: dict[str, float] = defaultdict(float)
+    last_entry: dict[str, datetime] = {}
+    for event in sorted(events, key=lambda e: e["created_at"]):
+        if event["kind"] not in TRADE_KINDS or not event.get("symbol"):
+            continue
+        details = _details(event)
+        quantity = details.get("quantity")
+        if not isinstance(quantity, (int, float)):
+            continue
+        net[event["symbol"]] += quantity if details.get("side") == "buy" else -quantity
+        if _is_entry(event):
+            last_entry[event["symbol"]] = parse_time(event["created_at"])
+    return dict(net), last_entry
 
 
 def compute_stats(
@@ -95,8 +113,29 @@ def compute_stats(
     open_pl = [(p["symbol"], p.get("unrealized_pl")) for p in positions if p.get("unrealized_pl") is not None]
     worst_open = min(open_pl, key=lambda item: item[1]) if open_pl else None
 
+    # A new entry soon after a losing exit is the classic "trading to win it back" pattern.
+    revenge = 0
+    for trade in entry_trades:
+        opened = parse_time(trade["created_at"])
+        if any(
+            _details(e).get("realized_pl") is not None and _details(e)["realized_pl"] < 0
+            and timedelta(0) <= opened - parse_time(e["created_at"]) <= REVENGE_WINDOW
+            for e in exits
+        ):
+            revenge += 1
+
+    blocked = [e for e in events if e["kind"] == "order_blocked"]
+    blocked_by_reason = Counter(_details(e).get("category", "other") for e in blocked)
+    plans = [e for e in events if e["kind"] == "plan_proposed"]
+    closed_outside = [e for e in exits if e["kind"] == "position_closed"]
+
     return {
         "first_event_at": events[0]["created_at"] if events else None,
+        "blocked_orders": len(blocked),
+        "blocked_orders_by_reason": dict(blocked_by_reason),
+        "plans_discussed_with_zuri": len(plans),
+        "closed_outside_zuri": len(closed_outside),
+        "trades_soon_after_a_loss": revenge,
         "symbols_of_interest": len(first_interest),
         "symbols_traded": len(first_trade),
         "interest_to_trade_rate_pct": round(100 * len(first_trade) / len(first_interest), 1) if first_interest else None,
@@ -131,7 +170,7 @@ def timeline(events: list[dict[str, Any]], limit: int = 60) -> list[dict[str, An
             "at": e["created_at"],
             "kind": e["kind"],
             "symbol": e.get("symbol"),
-            **{k: v for k, v in _details(e).items() if k in {"side", "quantity", "price", "action", "realized_pl", "stop_loss", "environment", "broker"}},
+            **{k: v for k, v in _details(e).items() if k in {"side", "quantity", "price", "action", "realized_pl", "stop_loss", "environment", "broker", "reason", "take_profit", "risk_percent", "idea", "category"}},
         }
         for e in ordered
     ]

@@ -61,7 +61,7 @@ export function HistoryView({ linked, token, refreshKey }: { linked: LinkedAccou
 
   return (
     <div className="secondary-view">
-      <div className="section-title history-title">
+      <div className="section-title history-title" data-zuri-target="history-log">
         <div>
           <span className="small-label">{linked.data ? `${linked.data.broker_name} · ${linked.data.environment.toUpperCase()} · TRADE LOG` : "TRADE LOG"}</span>
           <h2>History</h2>
@@ -74,7 +74,7 @@ export function HistoryView({ linked, token, refreshKey }: { linked: LinkedAccou
 
       {connected && <div className="content-card history-card">
         <div className="history-toolbar">
-          <div className="history-tabs" aria-label="History tabs">
+          <div className="history-tabs" aria-label="History tabs" data-zuri-target="history-tabs">
             {([["closed", "Closed trades"], ["orders", "Orders"], ["open", "Open positions"]] as [Tab, string][]).map(([key, label]) => (
               <button key={key} type="button" className={tab === key ? "history-tab active" : "history-tab"} onClick={() => setTab(key)}>{label}</button>
             ))}
@@ -103,7 +103,7 @@ export function HistoryView({ linked, token, refreshKey }: { linked: LinkedAccou
         <small>Closed-trade P&amp;L is estimated from filled orders for Alpaca and Tradier.</small>
       </div>}
 
-      <SnapshotGallery token={token} refreshKey={refreshKey} />
+      <div data-zuri-target="history-snapshots"><SnapshotGallery token={token} refreshKey={refreshKey} /></div>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import Image from "next/image";
 import { useZuriAuth, ZuriAuthGate } from "./auth";
 import { BrokerConnections } from "./broker-connections";
 import { HistoryView } from "./history-view";
-import { CommunityPanel, CoachingPanel } from "./dashboard-insights";
+import { CoachingPanel } from "./dashboard-insights";
 import { TradeConversation } from "./trade-conversation";
 import { SnapshotGallery, captureScreenForTrade } from "./trade-snapshots";
 import { ChartResearch } from "./chart-research";
@@ -30,7 +30,7 @@ import {
   type UserPreferences,
   type ZuriJourney,
 } from "./user-data";
-import { JourneyChecklist, ZuriMascot } from "./zuri-journey";
+import { ZuriMascot } from "./zuri-journey";
 import { loadInvolvement, saveInvolvement, loadLayout, saveLayout, ZuriOnboarding, type Involvement, type MarketLayout, type OnboardingResult } from "./zuri-onboarding";
 import { ZuriGuide } from "./zuri-guide";
 import { logZuriEvent, useZuriAccess, useZuriNudges, ZuriTakeover, ZuriTradeCard, type Walkthrough, type WalkthroughStep, type ZuriAction, type ZuriNudge } from "./zuri-agent";
@@ -597,9 +597,16 @@ function TradingWorkspace() {
     return `${linkedAccount.data.environment === "live" ? "LIVE" : "Paper"} order sent: ${body.status ?? "submitted"}.`;
   };
 
+  const CHART_STEP_TARGETS = ["chart-timeframes", "chart-panel", "journal-actions", "ai-takeaway", "news-charts", "chart-scanners", "chart-backtest", "chart-backtest-history"];
   const applyStepRef = useRef<(step: WalkthroughStep) => void>(() => undefined);
   useEffect(() => { applyStepRef.current = (step) => {
     setSection(step.section as Section);
+    if (watchlistSymbols.length === 0 && CHART_STEP_TARGETS.includes(step.target)) {
+      // The user skipped picking a market; open a starter one so these steps have something real to show.
+      const interests = Array.isArray(session?.user.user_metadata?.primary_markets) ? (session.user.user_metadata.primary_markets as string[]) : [];
+      const starter = instruments.find((item) => interests.includes(item.group)) ?? instruments[0];
+      if (starter) addInstrument(starter.symbol);
+    }
     if (step.symbol && watchlistSymbols.includes(step.symbol)) setSelectedSymbol(step.symbol);
     if (step.timeframe && timeframes.includes(step.timeframe)) setTimeframe(step.timeframe);
     if (step.prefill?.search !== undefined) setQuery(step.prefill.search);
@@ -611,9 +618,15 @@ function TradingWorkspace() {
   const closeWalkthrough = useCallback((finished: boolean) => {
     setWalkthrough((current) => {
       if (current) logZuriEvent(accessToken, finished ? "walkthrough_finished" : "walkthrough_exited", current.title);
+      if (current && finished) {
+        // What is best next has changed, and after the tour the user lands on Zuri's fresh next move.
+        if (current.id === "site_tour") setSection("Dashboard");
+        nextStepAt.current = 0;
+        window.setTimeout(() => void loadNextStep(), 0);
+      }
       return null;
     });
-  }, [accessToken]);
+  }, [accessToken, loadNextStep]);
 
   return (
     <main className="terminal-shell">
@@ -646,7 +659,7 @@ function TradingWorkspace() {
           {section === "Charts" && watchlistInstruments.length === 0 && (() => {
             const interests = Array.isArray(session?.user.user_metadata?.primary_markets) ? (session!.user.user_metadata.primary_markets as string[]) : [];
             const starters = [...instruments].sort((a, b) => Number(interests.includes(b.group)) - Number(interests.includes(a.group)));
-            return <section className="chart-welcome" aria-label="Pick your first market">
+            return <section className="chart-welcome" aria-label="Pick your first market" data-zuri-target="chart-welcome">
               <div className="chart-welcome-head">
                 <span className="chart-welcome-spark">✳</span>
                 <h2>Your chart desk is ready. Pick a first market.</h2>
@@ -667,8 +680,12 @@ function TradingWorkspace() {
             </section>;
           })()}
           {section === "Charts" && watchlistInstruments.length > 0 && <>
+            <section className="chart-head">
+              <div className="chart-head-symbol"><span className={`watch-icon ${symbol.group.toLowerCase()}`}>{symbol.icon}</span><div><b>{symbol.symbol}</b><small>{symbol.name} · {symbol.group === "Crypto" ? "COINBASE" : "GLOBAL"}</small></div></div>
+              <div className="chart-head-price">{symbol.hasQuote ? <><strong>{symbol.price}</strong><span className={symbol.up ? "positive" : "negative"}>{symbol.change} <small>today</small></span></> : <span className="muted">Loading the real quote…</span>}</div>
+              <div className="ohlc">{symbol.hasQuote && (symbolDetail === "simple" ? <span>Today&apos;s move <b>{symbol.change}</b></span> : <><span>High <b>{symbol.high ?? "—"}</b></span><span>Low <b>{symbol.low ?? "—"}</b></span>{symbol.volume && <span>Volume <b>{symbol.volume}</b></span>}</>)}</div>
+            </section>
             <div className="journal-chart-bar">
-              <div className="journal-chart-symbol"><span className={`watch-icon ${symbol.group.toLowerCase()}`}>{symbol.icon}</span><span><b>{symbol.symbol}</b><small>{symbol.name}</small></span></div>
               <div className="journal-intervals" data-zuri-target="chart-timeframes" aria-label="Chart interval">{timeframes.map((item) => <button key={item} className={timeframe === item ? "time-button active" : "time-button"} onClick={() => setTimeframe(item)}>{item}</button>)}</div>
               <div className="journal-chart-actions" data-zuri-target="journal-actions">
                 <button className="journal-capture-button" onClick={() => { setJournalDraftSide("Watching"); setJournalDraftOpen(true); }}>＋ <span>Note</span></button>
@@ -677,28 +694,29 @@ function TradingWorkspace() {
                 <button className="journal-saved-button" onClick={() => setSection("Journal")}>Journal <span>{journalEntries.length}</span></button>
               </div>
             </div>
-            <div className="chart-toolbar"><button className="symbol-select" onClick={() => setWatchlistOpen(!watchlistOpen)}><span className="coin btc">{symbol.icon}</span><b>{symbol.symbol}</b><span className="chevron">⌄</span></button><div className="toolbar-divider"/>{timeframes.map((item) => <button key={item} className={timeframe === item ? "time-button active" : "time-button"} onClick={() => setTimeframe(item)}>{item}</button>)}</div>
-            <div className="market-summary" data-zuri-target="chart-panel"><div><span className="instrument-name">{symbol.name} <span className="exchange-tag">· {symbol.group === "Crypto" ? "COINBASE" : "GLOBAL"}</span></span><strong>{symbol.price}</strong><span className={symbol.hasQuote ? (symbol.up ? "positive" : "negative") : "muted"}>{symbol.change} <small>today</small></span></div><div className="ohlc">{symbol.hasQuote ? (symbolDetail === "simple" ? <span>Today&apos;s move: <b>{symbol.change}</b></span> : <><span>H <b>{symbol.high ?? "—"}</b></span><span>L <b>{symbol.low ?? "—"}</b></span>{symbol.volume && <span>Vol <b>{symbol.volume}</b></span>}</>) : <span>Loading the real quote…</span>}</div></div>
-            <section className="chart-panel"><div className="chart-labels"><span><i className="legend-candle"/> Candles</span><span><i className="legend-line"/> EMA 20</span><span className="chart-label-right">USD <span>⌄</span></span></div><div className="chart-stage"><aside className="drawing-toolbar">{chartTools.slice(0, 9).map((tool, index) => <button key={`${tool}-draw-${index}`} className={activeTool === tool ? "drawing-button chosen" : "drawing-button"} title={`Drawing tool ${index + 1}`} onClick={() => setActiveTool(activeTool === tool ? "" : tool)}>{tool}</button>)}<span className="draw-separator"/><button className="drawing-button" title="Remove drawings" onClick={() => setActiveTool("")}>⌫</button></aside><Chart symbol={symbol} timeframe={timeframe} drawing={activeTool} aiOnChart={aiOnChart}/>            </div></section>
-                        <div className="lower-tabs"><span className="lower-tabs-right">Prices from a public market-data feed, delayed by up to 15 minutes</span></div>
-                        <div className="below-chart"><section className="watch-summary"><div className="section-title"><div><span className="small-label">YOUR WATCHLIST</span><h2>{watchlistInstruments.length} {watchlistInstruments.length === 1 ? "symbol" : "symbols"}</h2></div><button className="text-action" onClick={() => setWatchlistOpen(!watchlistOpen)}>View watchlist ↗</button></div>{watchlistInstruments.map((item) => <div key={item.symbol} className="pulse-row"><span>{item.symbol}</span><strong>{item.price}</strong><span className={item.hasQuote ? (item.up ? "positive" : "negative") : "muted"}>{item.change}</span></div>)}</section><section className="ai-takeaway" data-zuri-target="ai-takeaway"><div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI · {symbol.symbol} TODAY</span><span className="confidence">REAL QUOTE</span></div><h2>{symbol.hasQuote ? `${symbol.symbol} · ${symbol.up ? "Up" : "Down"} ${symbol.change.replace(/^[+−]/, "")} today` : `${symbol.symbol} · loading`}</h2><p>{aiBrief}</p><div className="ai-foot"><span>Based on the real day quote</span><button className="text-action" onClick={() => { setAssistantDraft(`Please analyse the ${symbol.symbol} chart for me.`); setAssistantOpen(true); }}>Ask Zuri for a full analysis →</button></div></section></div>
+            <section className="chart-panel" data-zuri-target="chart-panel"><div className="chart-labels"><span><i className="legend-candle"/> Candles</span><span><i className="legend-line"/> EMA 20</span><span className="chart-label-right">USD <span>⌄</span></span></div><div className="chart-stage"><aside className="drawing-toolbar">{chartTools.slice(0, 9).map((tool, index) => <button key={`${tool}-draw-${index}`} className={activeTool === tool ? "drawing-button chosen" : "drawing-button"} title={`Drawing tool ${index + 1}`} onClick={() => setActiveTool(activeTool === tool ? "" : tool)}>{tool}</button>)}<span className="draw-separator"/><button className="drawing-button" title="Remove drawings" onClick={() => setActiveTool("")}>⌫</button></aside><Chart symbol={symbol} timeframe={timeframe} drawing={activeTool} aiOnChart={aiOnChart}/>            </div></section>
+            <p className="chart-caption">Prices from a public market-data feed, delayed by up to 15 minutes</p>
+            <section className="ai-takeaway" data-zuri-target="ai-takeaway"><div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI · {symbol.symbol} TODAY</span><span className="confidence">REAL QUOTE</span></div><h2>{symbol.hasQuote ? `${symbol.symbol} · ${symbol.up ? "Up" : "Down"} ${symbol.change.replace(/^[+−]/, "")} today` : `${symbol.symbol} · loading`}</h2><p>{aiBrief}</p><div className="ai-foot"><span>Based on the real day quote</span><div className="ai-foot-actions"><button className="news-link" aria-pressed={aiOnChart} onClick={() => setAiOnChart(!aiOnChart)}>{aiOnChart ? "Hide chart context" : "Add to chart"}</button><button className="text-action" onClick={() => { setAssistantDraft(`Please analyse the ${symbol.symbol} chart for me.`); setAssistantOpen(true); }}>Ask Zuri for a full analysis →</button></div></div></section>
             {journalDraftOpen && <JournalCapture symbol={symbol} timeframe={timeframe} initialSide={journalDraftSide} onSave={saveJournalEntry} onCancel={() => setJournalDraftOpen(false)} />}
           </>}
-          {section === "Dashboard" && journey?.phase === "done" && (
-            <section className="content-card zuri-next" data-zuri-target="zuri-next">
-              <div className="section-title"><div><span className="small-label">ZURI · YOUR BEST NEXT MOVE</span><h2>{nextStep ? nextStep.primary.headline : nextStepError ? "I couldn't decide just now" : "Thinking about what's best for you…"}</h2></div><button className="text-action" disabled={nextStepBusy} onClick={() => void loadNextStep()}>{nextStepBusy ? "Thinking…" : "Re-check ↻"}</button></div>
-              {nextStep && <>
-                <p>{nextStep.primary.why}</p>
-                <div className="zuri-next-actions">
-                  <button type="button" className="zuri-next-primary" onClick={() => runNextStep(nextStep.primary)}>{nextStep.primary.walkthrough ? "Do it with me" : "Talk it through"}</button>
-                  {nextStep.alternatives.map((item) => <button key={item.headline} type="button" className="zuri-next-alt" onClick={() => runNextStep(item)}>{item.headline}</button>)}
-                </div>
-              </>}
-              {nextStepError && <p className="muted">{nextStepError}</p>}
-            </section>
-          )}
           {section === "Dashboard" && (
             <Dashboard
+              hero={journey?.phase === "done" ? (
+                <section className="content-card zuri-next" data-zuri-target="zuri-next">
+                  <ZuriMascot mood="idle" size={56} />
+                  <div className="zuri-next-body">
+                    <div className="section-title"><div><span className="small-label">ZURI · YOUR BEST NEXT MOVE</span><h2>{nextStep ? nextStep.primary.headline : nextStepError ? "I couldn't decide just now" : "Thinking about what's best for you…"}</h2></div><button className="text-action" disabled={nextStepBusy} onClick={() => void loadNextStep()}>{nextStepBusy ? "Thinking…" : "Re-check ↻"}</button></div>
+                    {nextStep && <>
+                      <p>{nextStep.primary.why}</p>
+                      <div className="zuri-next-actions">
+                        <button type="button" className="zuri-next-primary" onClick={() => runNextStep(nextStep.primary)}>{nextStep.primary.walkthrough ? "Do it with me" : "Talk it through"}</button>
+                        {nextStep.alternatives.map((item) => <button key={item.headline} type="button" className="zuri-next-alt" onClick={() => runNextStep(item)}>{item.headline}</button>)}
+                      </div>
+                    </>}
+                    {nextStepError && <p className="muted">{nextStepError}</p>}
+                  </div>
+                </section>
+              ) : null}
               setSection={setSection}
               news={marketNews}
               loading={marketNewsLoading}
@@ -711,16 +729,7 @@ function TradingWorkspace() {
               linked={linkedAccount}
               token={accessToken}
               refreshKey={journalRefresh}
-              checklist={journey?.phase === "done" ? (
-                <JourneyChecklist
-                  journey={journey}
-                  brokerLinked={linkedAccount.status === "ready"}
-                  hasPositions={(linkedAccount.data?.positions.length ?? 0) > 0}
-                  journalCount={journalEntries.length}
-                  onChange={updateJourney}
-                  setSection={setSection}
-                />
-              ) : null}
+              checklist={null}
             />
           )}
           {section === "Trade" && <TradeView symbol={symbol} instruments={instruments} orderSide={orderSide} setOrderSide={setOrderSide} linked={linkedAccount} token={session?.access_token ?? ""} onTraded={reloadJournal} riskPercent={userPreferences?.max_trade_risk_percent ?? 1}/>}
@@ -761,8 +770,15 @@ function TradingWorkspace() {
                 : (layoutActive && layout?.mode === "tabs" ? filteredInstruments.filter((item) => item.group === activeMarket) : filteredInstruments).map(renderQuoteRow)}
               {filteredInstruments.length === 0 && <div className="empty-search">{watchlistSymbols.length === 0 && !query ? "Your watchlist is empty. Search to add symbols." : "No matching markets"}</div>}
             </div>
-            <div className="rail-section-heading"><span>ZURI AI OVERVIEW</span><span className="live-dot"/></div>
-            <section className="ai-overview-card">
+            <div className="rail-section-heading"><span>{section === "Charts" ? "MARKET NEWS" : "ZURI AI OVERVIEW"}</span><span className="live-dot"/></div>
+            {watchlistInstruments.length === 0 ? (
+              <section className="rail-empty">
+                <h3>Pick a market first</h3>
+                <p>Once you choose a market, Zuri shows its live read and the headlines that matter to it here.</p>
+                <button className="outline-button" onClick={() => setSection("Charts")}>Choose a market →</button>
+              </section>
+            ) : <>
+            {section !== "Charts" && <section className="ai-overview-card">
               <div className="ai-overview-header">
                 <div className="ai-badge"><span className="ai-badge-mark">✦</span><span>ZURI AI</span></div>
                 <span className="ai-overview-status">{symbol.hasQuote ? "REAL QUOTE" : "WAITING"}</span>
@@ -779,7 +795,7 @@ function TradingWorkspace() {
                 <button className="news-link" aria-pressed={aiOnChart} onClick={() => setAiOnChart(!aiOnChart)}>{aiOnChart ? "Hide chart context" : "Add to chart"}</button>
                 <button className="text-action" onClick={() => { setAssistantDraft(`Please analyse the ${symbol.symbol} chart for me.`); setAssistantOpen(true); }}>Deep dive →</button>
               </div>
-            </section>
+            </section>}
             <MarketNewsSection
               variant="charts"
               symbol={symbol.symbol}
@@ -790,6 +806,7 @@ function TradingWorkspace() {
               onAskAboutStory={askZuriAboutNews}
               onBacktestStory={useNewsForBacktest}
             />
+            </>}
           </>}
         </aside>}
       </div>
@@ -830,7 +847,7 @@ function TradingWorkspace() {
         involvement={involvement}
         onInvolvement={changeInvolvement}
       />
-      {walkthrough && <ZuriTakeover walkthrough={walkthrough} onApplyStep={applyWalkthroughStep} onClose={closeWalkthrough} />}
+      {walkthrough && <ZuriTakeover walkthrough={walkthrough} watchlistEmpty={watchlistSymbols.length === 0} onApplyStep={applyWalkthroughStep} onClose={closeWalkthrough} />}
     </main>
   );
 }
@@ -1254,6 +1271,7 @@ function MarketNewsSection({
 }
 
 function Dashboard({
+  hero,
   setSection,
   news,
   loading,
@@ -1265,6 +1283,7 @@ function Dashboard({
   token,
   refreshKey,
 }: {
+  hero: React.ReactNode;
   checklist: React.ReactNode;
   token: string;
   refreshKey: number;
@@ -1276,20 +1295,16 @@ function Dashboard({
   onRefresh: () => void;
   onAskAboutStory: (article: MarketNewsArticle) => void;
 }) {
-  const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
   const [greetingDate] = useState(() => new Date());
   const hour = greetingDate.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   return (
-    <div className="secondary-view">
+    <div className="secondary-view dashboard-view">
       <div className="dashboard-greeting">
-        <div><span className="small-label">{greetingDate.toLocaleDateString("en-GB", { weekday: "long", day: "2-digit", month: "long", year: "numeric" }).toUpperCase()}</span><h2>{greeting}.</h2><p>Here’s the signal behind your numbers today.</p></div>
-        <button className="solid-button" onClick={() => setSection("Trade")}>＋ <span>New order</span></button>
+        <div><h2>{greeting}.</h2><p>Here’s the signal behind your numbers today.</p></div>
       </div>
+      {hero}
       {checklist}
-      <CoachingPanel token={token} refreshKey={refreshKey} onTags={setSuggestedTags} />
-      <div data-zuri-target="dash-community"><CommunityPanel token={token} suggestedTags={suggestedTags} /></div>
-      <MarketNewsSection variant="dashboard" news={news} loading={loading} error={error} onRefresh={onRefresh} onAskAboutStory={onAskAboutStory} />
       {linked.status !== "ready" ? (
         <section className="content-card">
           <div className="section-title"><div><span className="small-label">BROKER ACCOUNT</span><h2>{linked.status === "loading" ? "Loading your account…" : linked.status === "none" ? "No broker linked yet" : "Account unavailable"}</h2></div></div>
@@ -1314,6 +1329,8 @@ function Dashboard({
           </>
         );
       })()}
+      <CoachingPanel token={token} refreshKey={refreshKey} />
+      <MarketNewsSection variant="dashboard" news={news} loading={loading} error={error} onRefresh={onRefresh} onAskAboutStory={onAskAboutStory} />
     </div>
   );
 }

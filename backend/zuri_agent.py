@@ -319,12 +319,61 @@ def _step(section: str, target: str, title: str, body: str, **extra) -> dict:
     return {"section": section, "target": target, "title": title, "body": body, **extra}
 
 
+ALPACA_SIGNUP = "https://app.alpaca.markets/signup"
+ALPACA_PAPER = "https://app.alpaca.markets/paper/dashboard/overview"
+
+
 def _broker_steps() -> list[dict]:
+    """Alpaca is the recommended first broker (free paper account, no money needed). Each step says exactly where to click and what to do."""
     return [
-        _step("Settings", "nav-Settings", "Open Settings", "Broker connections live in Settings.", settings_tab="Broker"),
-        _step("Settings", "settings-panel", "Open a free practice account", "Practice (paper) accounts trade with pretend money, so nothing real is at risk. Create one free with your broker, then generate API keys for it."),
-        _step("Settings", "settings-panel", "Connect your account", "Choose a broker, paste the Key ID and Secret (trading permissions only, never withdrawals), and start with a paper account."),
+        _step("Settings", "nav-Settings", "Step 1 of 7: Open Settings", "A broker is the company that carries out your trades; Zuri never holds your money. We'll connect a free practice account with pretend money. You'll work in two places: this app and Alpaca's website.", settings_tab="Broker",
+                  how=["Click Settings at the bottom of the menu on the left.", "Make sure the Broker tab is selected at the top of Settings.", "Keep this tab open: you'll open Alpaca's website in a new tab and come back here."]),
+        _step("Settings", "broker-list", "Step 2 of 7: Create your free Alpaca account", "Alpaca's site opens in a new tab, so Zuri stays here for you to come back to.",
+              how=["Click the button below to open Alpaca's sign-up page.", "Sign up with your email and a password (choose a paper-trading account if it asks; practice money only).", "Confirm your email if Alpaca sends you a verification link."],
+              links=[{"label": "Open Alpaca sign-up", "url": ALPACA_SIGNUP}]),
+        _step("Settings", "broker-list", "Step 3 of 7: Switch to your Paper account", "Alpaca has a real-money and a paper side. You want paper, so nothing real is ever at risk.",
+              how=["Click the button below to open your Alpaca paper dashboard.", "Check the account switcher at the top left says Paper (not Live). If it doesn't, switch it to Paper."],
+              links=[{"label": "Open Alpaca paper dashboard", "url": ALPACA_PAPER}]),
+        _step("Settings", "broker-list", "Step 4 of 7: Generate your API keys", "API keys are like a password that lets Zuri send orders to your practice account without ever seeing your login.",
+              how=["On the paper dashboard, find the API Keys box on the right side of the overview page.", "Click Generate New Keys.", "Copy the Key ID and the Secret Key. The secret is shown only once, so keep that tab open until you've pasted both into Zuri."]),
+        _step("Settings", "broker-list", "Step 5 of 7: Come back and click Link account", "Return to this tab (Zuri).",
+              how=["Find the Alpaca row in the list.", "Click its Link account button. A short form opens."]),
+        _step("Settings", "broker-form", "Step 6 of 7: Paste your keys", "These fields are hidden as you type, which is normal.",
+              how=["Paste the Key ID into API key ID.", "Paste the Secret Key into API secret key.", "Leave Environment on Paper / practice.", "Click Verify and link. Zuri checks the keys with Alpaca and stores them encrypted."]),
+        _step("Settings", "broker-list", "Step 7 of 7: You're linked", "The Alpaca row should now say Paper account and show your practice balance. If you see an error, the usual causes are a key copied with a missing character, keys from the Live side, or an old key you regenerated. Generate fresh paper keys and try again, and ask me if you get stuck. Prefer another broker? OANDA (forex) and Tradier (stocks) also work and need their own token and account ID.",
+              how=["Look at the Alpaca row. It should say Paper account and show your practice balance.", "Next, click Dashboard in the left menu and press Do it with me on the next-move card."]),
     ]
+
+
+TOUR_HOW: dict[str, list[str]] = {
+    "nav-Dashboard": ["Click Dashboard in the menu on the left. This is where you land each time you sign in."],
+    "dash-weekly": ["Scroll to Weekly breakdown on the Dashboard.", "Read this week against last week, then the bars for each day.", "Press Ask Zuri for my weekly review once you have a few closed trades."],
+    "dash-learn": ["Find Strategies and free learning on the Dashboard.", "Read the strategy ideas first, then click any video or course. Each opens in a new tab, so Zuri stays open here."],
+    "nav-Charts": ["Click Charts in the menu on the left."],
+    "chart-welcome": ["Click any market card to add it to your watchlist and open its chart.", "Then press Next. If you'd rather skip, I'll open a starter market for you."],
+    "chart-timeframes": ["Find the row of timeframe buttons above the chart.", "Click one: 1m-15m for short trades, 1h-1D for the bigger picture."],
+    "chart-panel": ["Look at the price and its move at the top of the chart.", "Follow the candles from left to right and see whether they're climbing, falling or sideways."],
+    "journal-actions": ["Click Note, Long plan or Short plan under the chart.", "Write your entry, stop and target, then save. It appears in your Journal."],
+    "quotes-rail": ["Look at the Quotes panel on the right.", "Click a symbol to open its chart, or type in Search quotes to add another market."],
+    "news-charts": ["Scroll to the news list for your symbol.", "Click Ask Zuri on a story to get it explained, or send it to the backtest."],
+    "chart-scanners": ["Find AI scanners below the chart.", "Describe a condition in your own words, for example: alert me when RSI drops below 30.", "Read the rule I draft, then click Activate."],
+    "chart-backtest": ["Find Backtest a setup below the chart.", "Choose a setup, a date range and a timeframe, then click Run.", "Read the results: average return and the share of positive outcomes."],
+    "chart-backtest-history": ["Look at the list of past runs under the backtest.", "Click View signals on one, Run again to repeat it, or Delete to remove it."],
+    "nav-Trade": ["Click Trade in the menu on the left."],
+    "trade-convo": ["Click the message box in the chat.", "Tell me your trade idea in your own words and answer my questions.", "Press the button that fills the ticket when we agree on a plan."],
+    "trade-ticket": ["Check the symbol, Buy/Sell side, quantity, stop-loss and take-profit.", "Tick the confirmation, then click the order button yourself. Live orders also need the CONFIRM LIVE phrase."],
+    "nav-History": ["Click History in the menu on the left."],
+    "history-log": ["Choose a period from the date picker.", "Click Export CSV to download the log."],
+    "history-tabs": ["Click Closed trades to see results.", "Click Orders to see every order sent, or Open positions to see what you hold now."],
+    "history-snapshots": ["Click Snapshots.", "Open any trade to see the annotated chart I saved for it."],
+    "nav-Journal": ["Click Journal in the menu on the left."],
+    "journal-insights": ["Click Journal in the menu on the left.", "Find Zuri's journal and press Analyse my journey.", "Read each leak with its figures and the suggested fix."],
+    "nav-Settings": ["Click Settings at the bottom of the menu on the left."],
+    "settings-tabs": ["Click Risk in the tabs across the top of Settings."],
+    "risk-max-trade": ["Find Max trade risk and type a percentage (1 means 1%)."],
+    "risk-max-daily": ["Find Max daily loss and type a percentage (3 is a common choice).", "It saves by itself a moment later."],
+    "zuri-next": ["Look at the Your best next move card at the top of the Dashboard.", "Click Do it with me and I'll walk you through it, one click at a time."],
+}
 
 
 def build_walkthrough(goal: str, params: dict, available: list[str]) -> dict | None:
@@ -337,18 +386,25 @@ def build_walkthrough(goal: str, params: dict, available: list[str]) -> dict | N
 
     if goal == "open_chart":
         steps = [
-            _step("Charts", "nav-Charts", "Open Charts", f"I've switched to Charts{f' and loaded {symbol}' if symbol else ''}. This is where you read the market.", symbol=symbol, timeframe=timeframe),
-            _step("Charts", "chart-timeframes", "Pick your timeframe", "Short timeframes (1m-15m) show noise and fast moves; 1h-1D show the bigger structure. Choose the one that matches how long you want to hold."),
+            _step("Charts", "nav-Charts", "Open Charts", f"I've switched to Charts{f' and loaded {symbol}' if symbol else ''}. This is where you read the market.", symbol=symbol, timeframe=timeframe,
+                  how=["Click Charts in the menu on the left.", "The chart for your market loads in the middle of the page."]),
+            _step("Charts", "chart-timeframes", "Pick your timeframe", "Short timeframes (1m-15m) show noise and fast moves; 1h-1D show the bigger structure. Choose the one that matches how long you want to hold.",
+                  how=["Find the row of timeframe buttons above the chart (1m, 5m, 15m, 1h, 4h, 1D).", "Click one. Day traders usually start with 15m or 1h; swing traders with 4h or 1D."]),
         ]
         return {"id": goal, "title": f"Open {name}", "steps": steps}
 
     if goal == "analyze_chart":
         steps = [
-            _step("Charts", "nav-Charts", "Open the chart", f"I've opened {name}{f' on {timeframe}' if timeframe else ''} for you.", symbol=symbol, timeframe=timeframe),
-            _step("Charts", "chart-timeframes", "Start with the bigger picture", "Look at a higher timeframe first (1D or 4h) to see the main trend, then step down to find your entry."),
-            _step("Charts", "chart-panel", "Read the structure", "Mark the last swing highs and lows: those are your support and resistance. Note if price sits above or below the EMA 20 and whether highs and lows are rising or falling."),
-            _step("Charts", "ai-takeaway", "Check Zuri's read", "This card shows the real day move for the symbol. Treat it as a cue to verify on the chart, not a signal."),
-            _step("Charts", "journal-actions", "Write the plan before you act", "Use Long plan or Short plan to record entry, stop and target. Deciding the exit first is what keeps risk under control."),
+            _step("Charts", "nav-Charts", "Open the chart", f"I've opened {name}{f' on {timeframe}' if timeframe else ''} for you.", symbol=symbol, timeframe=timeframe,
+                  how=["Click Charts in the menu on the left if you're not already there."]),
+            _step("Charts", "chart-timeframes", "Start with the bigger picture", "Look at a higher timeframe first (1D or 4h) to see the main trend, then step down to find your entry.",
+                  how=["Click 1D above the chart and note whether price has mostly climbed, fallen or moved sideways.", "Then click 1h or 15m to look for your entry."]),
+            _step("Charts", "chart-panel", "Read the structure", "Mark the last swing highs and lows: those are your support and resistance. Note if price sits above or below the EMA 20 and whether highs and lows are rising or falling.",
+                  how=["Find the most recent peaks and dips on the chart: peaks are resistance, dips are support.", "Check whether each peak and dip is higher than the one before (uptrend) or lower (downtrend)."]),
+            _step("Charts", "ai-takeaway", "Check Zuri's read", "This card shows the real day move for the symbol. Treat it as a cue to verify on the chart, not a signal.",
+                  how=["Scroll below the chart to the Zuri card.", "Read today's move, then click Ask Zuri for a full analysis if you want me to go deeper."]),
+            _step("Charts", "journal-actions", "Write the plan before you act", "Use Long plan or Short plan to record entry, stop and target. Deciding the exit first is what keeps risk under control.",
+                  how=["Click Long plan if you expect a rise, or Short plan if you expect a fall.", "Fill in entry, stop and target, then save it. It goes into your journal."]),
         ]
         return {"id": goal, "title": f"Analyse {name}", "steps": steps}
 
@@ -356,8 +412,10 @@ def build_walkthrough(goal: str, params: dict, available: list[str]) -> dict | N
         if not symbol:
             return None
         return {"id": goal, "title": f"Add {symbol} to your watchlist", "steps": [
-            _step("Charts", "quotes-rail", "Your quotes", "This rail is your watchlist. Everything you follow lives here."),
-            _step("Charts", "market-search", "Search the symbol", f"I typed {symbol} into the search box for you. Click the result to add it.", prefill={"field": "search", "value": symbol}),
+            _step("Charts", "quotes-rail", "Your quotes", "This rail is your watchlist. Everything you follow lives here.",
+                  how=["Look at the Quotes panel on the right side of the screen.", "If it's collapsed, click the small arrow at its top to open it."]),
+            _step("Charts", "market-search", "Search the symbol", f"I typed {symbol} into the search box for you. Click the result to add it.", prefill={"field": "search", "value": symbol},
+                  how=[f"Check the Search quotes box shows {symbol}.", f"Click {symbol} in the results. It's added to your watchlist and its chart opens."]),
         ]}
 
     if goal == "set_risk_limits":
@@ -368,29 +426,43 @@ def build_walkthrough(goal: str, params: dict, available: list[str]) -> dict | N
         trade = limits.get("max_trade_risk_percent")
         daily = limits.get("max_daily_loss_percent")
         steps = [
-            _step("Settings", "nav-Settings", "Open Settings", "Risk limits live in Settings, under the Risk tab.", settings_tab="Risk"),
-            _step("Settings", "settings-tabs", "The Risk tab", "These tabs group your settings. I've opened Risk."),
+            _step("Settings", "nav-Settings", "Open Settings", "Risk limits live in Settings, under the Risk tab.", settings_tab="Risk",
+                  how=["Click Settings at the bottom of the menu on the left."]),
+            _step("Settings", "settings-tabs", "The Risk tab", "These tabs group your settings. I've opened Risk.",
+                  how=["Look at the tabs across the top of Settings.", "Click Risk if it isn't already selected."]),
             _step("Settings", "risk-max-trade", "Max trade risk", f"This caps how much of your account one trade may lose. {f'I set it to {trade}%.' if trade is not None else 'A common guideline is 1-2% or less.'}",
+                  how=["Find the Max trade risk box.", "Type the percentage you're comfortable losing on one trade (1 means 1%)."],
                   **({"prefill": {"field": "max_trade_risk_percent", "value": trade}} if trade is not None else {})),
             _step("Settings", "risk-max-daily", "Max daily loss", f"This is your stop-for-the-day line. {f'I set it to {daily}%.' if daily is not None else 'Hitting it means you stop trading until tomorrow.'}",
+                  how=["Find the Max daily loss box.", "Type the percentage of your account at which you stop trading for the day (3 is a common choice)."],
                   **({"prefill": {"field": "max_daily_loss_percent", "value": daily}} if daily is not None else {})),
-            _step("Settings", "settings-panel", "Saved automatically", "Changes save by themselves a moment after you edit them. You can adjust the numbers any time."),
+            _step("Settings", "settings-panel", "Saved automatically", "Changes save by themselves a moment after you edit them. You can adjust the numbers any time.",
+                  how=["There's no Save button: wait a second after typing.", "Come back here any time to change the numbers."]),
         ]
         return {"id": goal, "title": "Set your risk limits", "steps": steps}
 
-    if goal == "place_paper_trade":
+    if goal in ("place_paper_trade", "first_trade"):
         side = "sell" if params.get("side") == "sell" else "buy"
-        return {"id": goal, "title": f"Place a practice {side} order" + (f" on {symbol}" if symbol else ""), "steps": [
-            _step("Trade", "nav-Trade", "Open the Trade tab", "Orders are placed here.", symbol=symbol),
-            _step("Trade", "trade-ticket", "Fill the ticket", f"Choose {side.upper()}, check the symbol, and size the order so a stop-out stays within your per-trade risk limit."),
-            _step("Trade", "trade-ticket", "Add a stop and a target", "Enter both a stop-loss and a take-profit so the exit is decided before you enter."),
-            _step("Trade", "trade-ticket", "You press send", "Tick the confirmation and send the order yourself. I never place trades for you."),
+        first = goal == "first_trade"
+        return {"id": goal, "title": "Your first practice trade" if first else f"Place a practice {side} order" + (f" on {symbol}" if symbol else ""), "steps": [
+            _step("Trade", "nav-Trade", "Open the Trade tab", "Orders are placed here. Practice money only, so this is the safest way to learn." if first else "Orders are placed here.", symbol=symbol,
+                  how=["Click Trade in the menu on the left.", "You'll see a chat on the left and the order ticket on the right."]),
+            _step("Trade", "trade-convo", "Talk it through with me", "Tell me your idea, even a rough one, and we'll shape it together. I work out the size, stop and target from your risk limit, so there's no calculator.",
+                  how=["Click the message box in this chat panel.", "Type your idea, for example: I think BTCUSD will go up, I want to try a small practice trade.", "Press Enter and answer my questions. When we agree on a plan, press the button that fills the ticket."]),
+            _step("Trade", "trade-ticket", "Review the ticket", "Check the side and the symbol. If we planned it together, it's already filled in.",
+                  how=["Look at the Symbol box and check it's the market you meant.", "Check the Buy / Sell switch matches your idea (Buy if you expect it to rise, Sell if you expect it to fall).", "Check the Quantity. If we planned together it's already sized to your risk limit."]),
+            _step("Trade", "trade-ticket", "Add a stop and a target", "Enter both a stop-loss and a take-profit so the exit is decided before you enter.",
+                  how=["Find the Stop-loss box and enter the price where you'd admit you were wrong.", "Find the Take-profit box and enter the price where you'd happily take your gain.", "If you're unsure what numbers to use, ask me in the chat and I'll suggest them from the chart."]),
+            _step("Trade", "trade-ticket", "You press send", "Tick the confirmation and send the order yourself. I never place trades for you.",
+                  how=["Tick the confirmation box under the ticket.", "Click the Buy or Sell button at the bottom of the ticket.", "Wait for the green success message. Your trade now shows under History and in Open positions on the Dashboard."]),
         ]}
 
     if goal == "write_journal":
         return {"id": goal, "title": "Write a journal note", "steps": [
-            _step("Charts", "journal-actions", "Capture the idea", "Use Note, Long plan or Short plan to record what you see and why."),
-            _step("Journal", "nav-Journal", "Review it later", "Your entries collect here. Re-reading them is how patterns in your own behaviour show up."),
+            _step("Charts", "journal-actions", "Capture the idea", "Use Note, Long plan or Short plan to record what you see and why.",
+                  how=["Go to Charts and open the market you're thinking about.", "Under the chart, click Note (or Long plan / Short plan if you have a trade idea).", "Write why you like the idea and what would prove you wrong, then save."]),
+            _step("Journal", "nav-Journal", "Review it later", "Your entries collect here. Re-reading them is how patterns in your own behaviour show up.",
+                  how=["Click Journal in the menu on the left.", "Your notes are listed newest first. I also add my own entries for trades and plans I notice.", "Press Analyse my journey to see the leaks I've found."]),
         ]}
 
     if goal == "site_tour":
@@ -399,10 +471,10 @@ def build_walkthrough(goal: str, params: dict, available: list[str]) -> dict | N
             _step("Dashboard", "nav-Dashboard", "Your dashboard", "Home base: your account, open positions, today's news and your next steps with me."),
             _step("Dashboard", "dash-weekly", "Your weekly breakdown", "Your week at a glance: trades, wins, profit and loss by day, with Zuri's insights on what is working and what to try next. It fills in once a broker is linked and you've closed trades."),
             _step("Dashboard", "dash-learn", "Videos and free courses", "Strategy videos and free courses picked from your experience level, your markets and your trading history."),
-            _step("Dashboard", "dash-community", "Community", "Opt in with a nickname to meet traders who use the same strategies, share ideas and reply to posts. Leave any time and your posts are deleted."),
             _step("Charts", "nav-Charts", "Charts", "Read the market here: pick a symbol and timeframe, then use the news, AI scanners and backtests with saved history below the chart."),
             _step("Trade", "nav-Trade", "Trade", "Orders are placed here. Everything asks you to confirm first, and live-money orders need an extra safety phrase."),
-            _step("Journal", "nav-Journal", "Journal", "Write why you take a trade. Reviewing it later is the fastest way to improve."),
+            _step("History", "nav-History", "History", "Every closed trade, order and open position from your broker, with profit and loss and a CSV export. Zuri also saves an annotated chart snapshot of each trade here to study later."),
+            _step("Journal", "nav-Journal", "Journal", "Write why you take a trade, but you don't have to do it alone: I keep a journal for you too, recording your trades, positions closed elsewhere, orders your limits stopped and plans we talk through, so I can find your leaks."),
             _step("Settings", "nav-Settings", "Settings", "Your broker link, risk limits and how involved I am all live here.", settings_tab="Broker"),
         ]
         if detailed:
@@ -410,24 +482,35 @@ def build_walkthrough(goal: str, params: dict, available: list[str]) -> dict | N
                 steps[0],
                 steps[1],
                 steps[2],
-                steps[3],
                 _step("Charts", "nav-Charts", "Charts", "This is where you read the market."),
+                _step("Charts", "chart-welcome", "Pick your first market", "Charts show one market at a time, so your desk starts empty. Click any card here to add it to your watchlist and open its chart, then press Next. If you skip this I'll open a starter market for you.", needs_market=True),
                 _step("Charts", "chart-timeframes", "Timeframes", "Short timeframes (1m-15m) show noise and fast moves; 1h-1D show the bigger structure. Choose what matches how long you want to hold."),
-                _step("Charts", "chart-panel", "The chart and price", "The headline price and its daily change sit here. Learn to read trend, support and resistance before anything else."),
+                _step("Charts", "chart-panel", "The chart and price", "The live price and its move sit at the top of the chart. Learn to read trend, support and resistance before anything else."),
                 _step("Charts", "journal-actions", "Plans and notes", "Use Note, Long plan or Short plan to record entry, stop and target before you act."),
                 _step("Charts", "quotes-rail", "Your watchlist", "Everything you follow lives in this rail. Search to add more."),
                 _step("Charts", "news-charts", "News for this symbol", "Headlines relevant to the symbol on your chart. Ask me about a story, or send it to the backtest as event context."),
                 _step("Charts", "chart-scanners", "AI scanners", "Describe a condition in plain words, review the rule I draft, then activate it. Scanners are saved in this browser and check broker candles every minute while Zuri is open."),
                 _step("Charts", "chart-backtest", "Backtest a setup", "Replay a breakout, moving-average cross or RSI rule over real broker candles for a date range, with average return and the share of positive outcomes."),
                 _step("Charts", "chart-backtest-history", "Backtest history", "Every run is saved here. View the signals, run a setup again with its settings, or delete runs you don't need."),
-                steps[5],
-                _step("Trade", "trade-ticket", "The order ticket", "Choose a side, size the order so a stop-out stays within your risk limit, and always set a stop and a target."),
+                steps[4],
+                _step("Trade", "trade-convo", "Talk the trade through with me", "No calculator needed. Tell me your idea in your own words and we'll brainstorm it together: I'll ask what would prove you wrong, then work out the lot size, stop and target from your risk limit. You can push back or change the idea as often as you like."),
+                _step("Trade", "trade-ticket", "The order ticket", "When we agree on a plan, one click fills the ticket for you. Check it, then confirm it yourself. Live-money orders also need the CONFIRM LIVE phrase. I never place trades for you."),
+                _step("History", "nav-History", "History", "Your trade log lives here, pulled straight from your broker."),
+                _step("History", "history-log", "Your trade log and export", "Pick a period and export it to CSV. Closed-trade profit and loss is estimated from filled orders. Link a broker in Settings and this fills in by itself."),
+                _step("History", "history-tabs", "Closed trades, orders and open positions", "Switch between finished trades with their result, every order sent, and what you hold right now with floating profit and loss."),
+                _step("History", "history-snapshots", "Chart snapshots", "For every trade I save a chart with my own annotations: support, resistance, your entry and exit, and how your stop fit the recent range. Re-read them to see what you did well."),
                 steps[6],
+                _step("Journal", "journal-insights", "Zuri's own journal and leak finder", "From your very first watched symbol and first trade, I record everything automatically: orders, positions opened or closed outside Zuri, trades placed soon after a loss, orders your own limits stopped, and plans we discussed. Press Analyse my journey for the leaks, with the exact figures and a fix for each."),
                 *_broker_steps(),
                 _step("Settings", "settings-tabs", "Risk limits", "Next, the Risk tab: these limits protect your account.", settings_tab="Risk"),
                 _step("Settings", "risk-max-trade", "Max trade risk", "This caps how much of your account one trade may lose. 1-2% or less is a common guideline."),
                 _step("Settings", "risk-max-daily", "Max daily loss", "Your stop-for-the-day line. Hitting it means you stop trading until tomorrow."),
             ]
+        steps.append(_step("Dashboard", "zuri-next", "That's the tour. Now it's us", "From here I'll guide you. This card always shows the one best next move for you, starting with getting you set up and to your first practice trade, then helping you improve with every trade. Ask me anything in the chat at any time."))
+        for step in steps:
+            step.setdefault("how", TOUR_HOW.get(step["target"]) or None)
+            if not step["how"]:
+                del step["how"]
         return {"id": goal, "title": "Your full Zuri tour, including broker setup" if detailed else "A quick look around", "steps": steps}
 
     if goal == "link_broker":
@@ -646,6 +729,115 @@ def coaching_directive(signals: dict, open_gaps: list[str] | None = None) -> str
             "OPEN KNOWLEDGE GAPS you noted earlier (revisit one naturally when relevant, by asking them to explain it back in their own words, and when they get it right, say so): " + " | ".join(gaps) + ". "
         )
     return text + "</coaching_plan>"
+
+
+# --- Where the user is on their journey, and what Zuri is working toward with them ------------------------------
+# Computed from verified facts (never from the model), so the guidance after the tour cannot drift or stall.
+
+MONEY_GUARDRAIL = (
+    "Zuri's goal is to help the user grow their account steadily by becoming a better trader every day: protect capital, cut the leaks found in their own journal, repeat what demonstrably works. "
+    "Never promise or imply profit, never push bigger size, leverage, more frequent trading or chasing losses to 'make money faster', and never call a trade a sure thing. Consistent profit is a result of process."
+)
+
+_STAGES: dict[str, dict] = {
+    "connect": {
+        "title": "Get connected",
+        "objective": "No broker is linked, so nothing else can happen yet. Your one job is to get them to open and link a free paper (practice) broker account, step by step, removing every obstacle. Offer to do it with them. "
+                     "Be concrete about WHERE to go and WHAT to click, using only these facts: sign up at https://app.alpaca.markets/signup (paper account, practice money), confirm the email, open https://app.alpaca.markets/paper/dashboard/overview and check the top-left switcher says Paper, click Generate New Keys in the API Keys box, copy the Key ID and Secret Key (the secret is shown once), then in Zuri go to Settings, Broker, click Link account on the Alpaca row, paste both, leave Environment on Paper, click Verify and link. Never ask them to enable withdrawals, and never ask them to paste keys into the chat.",
+        "allowed": ("link_broker", "site_tour", "talk"),
+    },
+    "protect": {
+        "title": "Set the safety rails",
+        "objective": "Their broker is linked but they have not set risk limits. Before any trade, get them to set a per-trade and a daily loss limit they are comfortable with.",
+        "allowed": ("set_risk_limits", "talk", "site_tour"),
+    },
+    "pick_market": {
+        "title": "Choose a first market",
+        "objective": "Their desk is empty. Help them choose one market that fits their experience and interests and put it on the chart, so a first trade is possible.",
+        "allowed": ("add_to_watchlist", "open_chart", "analyze_chart", "set_risk_limits", "talk"),
+    },
+    "first_trade": {
+        "title": "Place your first trade",
+        "objective": "Everything is ready. YOUR MAIN FOCUS NOW is getting them to place their first practice trade, in a calm, well-planned way: talk the idea through, let the app size it, stop and target included, then they confirm it themselves. Remove hesitation, answer doubts, keep it small and safe. Do not let them drift into endless studying.",
+        "allowed": ("first_trade", "analyze_chart", "open_chart", "set_risk_limits", "talk"),
+    },
+    "learn": {
+        "title": "Learn from your first trades",
+        "objective": "They have started trading. Every trade is a lesson: help them write down why they took it, review each result (win or loss) calmly, and keep risk small while a few trades build a base of evidence about their habits.",
+        "allowed": ("first_trade", "write_journal", "talk", "analyze_chart", "open_chart", "set_risk_limits", "add_to_watchlist"),
+    },
+    "improve": {
+        "title": "Improve every day",
+        "objective": "They have a real track record. Work on getting more from it each day: find the leaks in their own data, pick ONE measurable experiment, reinforce what is working, and keep drawdowns inside their limits.",
+        "allowed": ("first_trade", "write_journal", "talk", "analyze_chart", "open_chart", "set_risk_limits", "add_to_watchlist"),
+    },
+}
+
+
+def journey_stage(signals: dict) -> dict:
+    """signals: broker_linked, risk_limits_set, watchlist_count, trades_recorded, closed_trades (None when unknown), journal_notes."""
+    def num(key: str) -> int:
+        try:
+            return int(signals.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    if not signals.get("broker_linked"):
+        stage = "connect"
+    elif not signals.get("risk_limits_set"):
+        stage = "protect"
+    elif num("watchlist_count") == 0:
+        stage = "pick_market"
+    elif num("trades_recorded") == 0:
+        stage = "first_trade"
+    else:
+        closed = signals.get("closed_trades")
+        closed = num("trades_recorded") // 2 if closed is None else num("closed_trades")
+        stage = "improve" if closed >= 10 else "learn"
+    return {"id": stage, **_STAGES[stage]}
+
+
+def stage_fallback(stage: str, signals: dict) -> dict:
+    """The move Zuri makes when the model is unavailable or picks something that does not serve the stage."""
+    moves = {
+        "connect": {"headline": "Link a free practice broker", "why": "Nothing else can happen until a broker is linked, and a practice account risks no real money. I'll walk you through it.", "goal": "link_broker"},
+        "protect": {"headline": "Set your safety limits", "why": "Before your first trade, decide the most you're willing to lose per trade and per day. It takes a minute and protects everything else.", "goal": "set_risk_limits"},
+        "pick_market": {"headline": "Pick your first market", "why": "Your desk is empty. Tell me what interests you and I'll help you choose one market to start with.", "goal": "talk", "chat_prompt": "My chart desk is empty. Which market should I start with, and can you open it for me?"},
+        "first_trade": {"headline": "Place your first practice trade", "why": "You're set up. The fastest way to learn is one small, planned practice trade. We'll talk the idea through and I'll size it for you.", "goal": "first_trade"},
+        "learn": (
+            {"headline": "Write why you took your trade", "why": "A short note on your reasoning is what turns a trade into a lesson.", "goal": "write_journal"}
+            if not signals.get("journal_notes") else
+            {"headline": "Review your latest trade with me", "why": "Each trade is data. Let's look at what you did well and one thing to change next time.", "goal": "talk", "chat_prompt": "Let's review my latest trade together. What did I do well and what should I change?"}
+        ),
+        "improve": {"headline": "Find your biggest leak", "why": "You have enough trades for real patterns. Let's find the one habit that costs you most and set an experiment for tomorrow.", "goal": "talk", "chat_prompt": "Look at my trading so far and find my biggest leak. Give me one experiment for tomorrow."},
+    }
+    return moves[stage]
+
+
+def stage_directive(stage: dict) -> str:
+    return (
+        f"\n<journey_stage id=\"{stage['id']}\">{stage['objective']} "
+        "Steer gently toward this, ending with ONE concrete next step when it fits, but answer what they asked first and never nag. "
+        "When you tell them how to do anything in Zuri or on another site, write it as numbered click-by-click steps: where to go, the exact button or field name, what to type or copy, and what they should see when it worked. Never assume they know where something is. "
+        "Never promise profit or push size, leverage or more trading; steady risk-managed improvement is the goal.</journey_stage>"
+    )
+
+
+def stage_signals(snapshot: dict, closed_trades: int | None = None) -> dict:
+    """Reads the verified journey snapshot into the signals journey_stage needs."""
+    activity = snapshot.get("activity_counts")
+    activity = activity if isinstance(activity, dict) else {}
+    limits = snapshot.get("risk_limits")
+    watchlist = snapshot.get("watchlist")
+    recorded = sum(activity.get(kind, 0) for kind in ("order_placed", "position_detected", "position_closed"))
+    return {
+        "broker_linked": isinstance(snapshot.get("broker_linked"), dict),
+        "risk_limits_set": isinstance(limits, dict) and any(value is not None for value in limits.values()),
+        "watchlist_count": len(watchlist) if isinstance(watchlist, list) else 0,
+        "trades_recorded": recorded or (1 if snapshot.get("open_positions") else 0),
+        "closed_trades": closed_trades,
+        "journal_notes": snapshot.get("journal_entries_with_notes") or 0,
+    }
 
 
 # --- Deterministic reading of explicit commands -------------------------------------------------

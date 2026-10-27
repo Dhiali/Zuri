@@ -163,6 +163,7 @@ export function BrokerConnections({ onChange }: { onChange?: () => void }) {
     <div className="settings-section">
       <span className="small-label">LIVE BROKER ACCOUNTS</span>
       <h3>Linked brokers</h3>
+      <div data-zuri-target="broker-list">
       <p className="auth-message">Credentials are encrypted on the Zuri server and never returned to the browser. Use API keys with trading permissions only; never enable withdrawals.</p>
       {loadError && <p className="auth-error" role="alert">{loadError}</p>}
       {error && <p className="auth-error" role="alert">{error}</p>}
@@ -196,7 +197,7 @@ export function BrokerConnections({ onChange }: { onChange?: () => void }) {
               )}
             </div>
             {linking === broker.id && (
-              <form className="broker-form" onSubmit={(event) => void handleLink(event, broker)} autoComplete="off">
+              <form className="broker-form" data-zuri-target="broker-form" onSubmit={(event) => void handleLink(event, broker)} autoComplete="off">
                 {broker.fields.map((field) => (
                   <label key={field}>{fieldLabels[field] ?? field}
                     <input name={field} type="password" required autoComplete="off" maxLength={512} />
@@ -225,6 +226,7 @@ export function BrokerConnections({ onChange }: { onChange?: () => void }) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }

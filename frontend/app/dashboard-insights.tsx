@@ -1,7 +1,6 @@
 "use client";
-import { formatDateTime } from "./time-zone";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { backendUrl } from "./linked-account";
 
 type GroupStats = { trades: number; wins: number; win_rate_pct: number | null; total_pl: number };
@@ -22,7 +21,6 @@ type Coaching =
       headlines: { tone: string; text: string }[];
       suggestions: Suggestion[];
       resources: Resource[];
-      suggested_tags: string[];
     };
 
 async function api<T>(token: string, path: string, init?: RequestInit): Promise<T> {
@@ -50,22 +48,26 @@ function DayBars({ days }: { days: { weekday: string; trades: number; pl: number
   );
 }
 
-function LearningSection({ learning }: { learning?: Learning }) {
-  if (!learning || (!learning.courses.length && !learning.videos.length)) return null;
-  const { markets, experience } = learning.based_on;
-  const basis = [experience, markets.length ? markets.join(", ") : null].filter(Boolean).join(" · ");
+function LearningSection({ learning, children, suggestionBasis }: { learning?: Learning; children?: React.ReactNode; suggestionBasis?: string }) {
+  const hasLearning = !!learning && (learning.courses.length > 0 || learning.videos.length > 0);
+  if (!hasLearning && !children) return null;
+  const basis = learning ? [learning.based_on.experience, learning.based_on.markets.length ? learning.based_on.markets.join(", ") : null].filter(Boolean).join(" · ") : "";
   return (
     <section className="content-card coach-card" data-zuri-target="dash-learn">
-      <div className="section-title"><div><span className="small-label">LEARN · CHOSEN FOR YOU{basis ? ` · ${basis.toUpperCase()}` : ""}</span><h2>Strategy videos and free courses</h2></div></div>
-      <ul className="resource-list">
-        {learning.courses.map((c) => <li key={c.url}><a href={c.url} target="_blank" rel="noopener noreferrer">{c.title}</a><small>{c.provider} · free course{c.why ? ` · ${c.why}` : ""} · opens in a new tab</small></li>)}
-        {learning.videos.map((v) => <li key={v.url}><a href={v.url} target="_blank" rel="noopener noreferrer">{v.title}</a><small>YouTube videos · opens in a new tab</small></li>)}
-      </ul>
+      <div className="section-title"><div><span className="small-label">{suggestionBasis ?? "LEARN · CHOSEN FOR YOU"}{basis ? ` · ${basis.toUpperCase()}` : ""}</span><h2>Strategies and free learning</h2></div></div>
+      {children}
+      {learning && hasLearning && <>
+        {children && <span className="small-label">VIDEOS AND FREE COURSES</span>}
+        <ul className="resource-list">
+          {learning.courses.map((c) => <li key={c.url}><a href={c.url} target="_blank" rel="noopener noreferrer">{c.title}</a><small>{c.provider} · free course{c.why ? ` · ${c.why}` : ""} · opens in a new tab</small></li>)}
+          {learning.videos.map((v) => <li key={v.url}><a href={v.url} target="_blank" rel="noopener noreferrer">{v.title}</a><small>YouTube videos · opens in a new tab</small></li>)}
+        </ul>
+      </>}
     </section>
   );
 }
 
-export function CoachingPanel({ token, refreshKey, onTags }: { token: string; refreshKey: number; onTags?: (tags: string[]) => void }) {
+export function CoachingPanel({ token, refreshKey }: { token: string; refreshKey: number }) {
   const [data, setData] = useState<Coaching | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
@@ -76,10 +78,10 @@ export function CoachingPanel({ token, refreshKey, onTags }: { token: string; re
     if (!token) return;
     let cancelled = false;
     api<Coaching>(token, `/api/dashboard/coaching?tz_offset_minutes=${tzOffset()}`)
-      .then((body) => { if (!cancelled) { setData(body); setError(""); if (body.status === "ok") onTags?.(body.suggested_tags); } })
+      .then((body) => { if (!cancelled) { setData(body); setError(""); } })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Could not load your coaching."); });
     return () => { cancelled = true; };
-  }, [token, refreshKey, onTags]);
+  }, [token, refreshKey]);
 
   async function writeNote() {
     setNoteBusy(true);
@@ -118,8 +120,7 @@ export function CoachingPanel({ token, refreshKey, onTags }: { token: string; re
         </>}
       </section>
 
-      <section className="content-card coach-card">
-        <div className="section-title"><div><span className="small-label">BASED ON YOUR TRADING HISTORY</span><h2>Strategies to try</h2></div></div>
+      <LearningSection learning={data.learning} suggestionBasis="BASED ON YOUR TRADING HISTORY">
         <div className="suggestion-list">
           {data.suggestions.map((s) => (
             <article key={s.id} className="suggestion">
@@ -129,103 +130,7 @@ export function CoachingPanel({ token, refreshKey, onTags }: { token: string; re
             </article>
           ))}
         </div>
-      </section>
-      <LearningSection learning={data.learning} />
+      </LearningSection>
     </>
-  );
-}
-
-type CommunityData = {
-  available_strategies: string[];
-  profile: { handle: string; strategies: string[]; bio: string } | null;
-  traders: { handle: string; strategies: string[]; shared: string[]; bio: string }[];
-  posts: { id: string; handle: string; strategy: string; body: string; created_at: string; mine: boolean; replies: { id: string; handle: string; body: string; created_at: string; mine: boolean }[] }[];
-};
-
-export function CommunityPanel({ token, suggestedTags }: { token: string; suggestedTags: string[] }) {
-  const [data, setData] = useState<CommunityData | null>(null);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-  const [filter, setFilter] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [handle, setHandle] = useState("");
-  const [bio, setBio] = useState("");
-  const [tags, setTags] = useState<string[]>([]);
-  const [draft, setDraft] = useState("");
-  const [draftTag, setDraftTag] = useState("");
-  const [replyFor, setReplyFor] = useState("");
-  const [replyText, setReplyText] = useState("");
-  const [tick, setTick] = useState(0);
-  const reload = useCallback(() => setTick((v) => v + 1), []);
-
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    api<CommunityData>(token, `/api/community${filter ? `?strategy=${encodeURIComponent(filter)}` : ""}`)
-      .then((body) => { if (!cancelled) { setData(body); setError(""); } })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Could not load the community."); });
-    return () => { cancelled = true; };
-  }, [token, filter, tick]);
-
-  const act = async (work: () => Promise<unknown>, done?: () => void) => {
-    setMessage("");
-    try { await work(); done?.(); reload(); } catch (e) { setMessage(e instanceof Error ? e.message : "Something went wrong."); }
-  };
-
-  if (error) return <section className="content-card"><p className="auth-message" role="alert">{error}</p></section>;
-  if (!data) return <section className="content-card"><p className="auth-message">Loading the community…</p></section>;
-
-  const joining = !data.profile || editing;
-  if (joining) {
-    const preset = tags.length ? tags : (data.profile?.strategies ?? suggestedTags.filter((t) => data.available_strategies.includes(t)));
-    return (
-      <section className="content-card community-card">
-        <div className="section-title"><div><span className="small-label">ZURI COMMUNITY · OPT-IN</span><h2>{data.profile ? "Edit your community profile" : "Meet traders who use your strategies"}</h2></div></div>
-        <p className="muted">Pick a nickname and the strategies you use. You only appear under a nickname: your name, email, balances and trades are never shared.</p>
-        <label className="field-label">Nickname (3-20 letters, numbers, underscore)<input value={handle || data.profile?.handle || ""} maxLength={20} onChange={(e) => setHandle(e.target.value)} /></label>
-        <label className="field-label">Short bio (optional)<input value={bio || data.profile?.bio || ""} maxLength={160} onChange={(e) => setBio(e.target.value)} /></label>
-        <div className="tag-picker" role="group" aria-label="Your strategies">{data.available_strategies.map((tag) => <button type="button" key={tag} className={preset.includes(tag) ? "tag active" : "tag"} onClick={() => setTags(preset.includes(tag) ? preset.filter((t) => t !== tag) : [...preset, tag].slice(0, 5))}>{tag}</button>)}</div>
-        {suggestedTags.length > 0 && <small className="muted">Zuri noticed you trade like a {suggestedTags[0].toLowerCase()} trader.</small>}
-        {message && <p className="auth-error" role="alert">{message}</p>}
-        <div className="snapshot-actions">
-          <button className="solid-button" disabled={preset.length === 0} onClick={() => void act(() => api(token, "/api/community/profile", { method: "PUT", body: JSON.stringify({ handle: (handle || data.profile?.handle || "").trim(), strategies: preset, bio: (bio || data.profile?.bio || "").trim() }) }), () => { setEditing(false); setTags([]); setHandle(""); setBio(""); })}>{data.profile ? "Save" : "Join the community"}</button>
-          {data.profile && <button className="outline-button" onClick={() => setEditing(false)}>Cancel</button>}
-          {data.profile && <button className="text-action" onClick={() => { if (window.confirm("Leave the community? Your nickname and all your posts will be deleted.")) void act(() => api(token, "/api/community/profile", { method: "DELETE" }), () => setEditing(false)); }}>Leave community</button>}
-        </div>
-      </section>
-    );
-  }
-
-  const profile = data.profile!;
-  const toggleFilterTag = (tag: string) => setFilter((current) => (current === tag ? "" : tag));
-  return (
-    <section className="content-card community-card">
-      <div className="section-title"><div><span className="small-label">ZURI COMMUNITY · @{profile.handle}</span><h2>Traders like you</h2></div><button className="text-action" onClick={() => setEditing(true)}>Edit profile</button></div>
-      <div className="tag-picker" role="group" aria-label="Filter by strategy">{profile.strategies.map((tag) => <button key={tag} type="button" className={filter === tag ? "tag active" : "tag"} onClick={() => toggleFilterTag(tag)}>{tag}</button>)}</div>
-      {data.traders.length > 0 && <div className="trader-row">{data.traders.map((t) => <div key={t.handle} className="trader-chip" title={t.bio}><b>@{t.handle}</b><small>{t.shared.join(" · ")}</small></div>)}</div>}
-      {data.traders.length === 0 && <p className="muted">You are among the first with these strategies. Start a conversation below.</p>}
-      <form className="trade-convo-form" onSubmit={(e) => { e.preventDefault(); void act(() => api(token, "/api/community/posts", { method: "POST", body: JSON.stringify({ body: draft, strategy: draftTag || filter || profile.strategies[0] }) }), () => setDraft("")); }}>
-        <select value={draftTag || filter || profile.strategies[0]} onChange={(e) => setDraftTag(e.target.value)} aria-label="Strategy for this post">{profile.strategies.map((t) => <option key={t}>{t}</option>)}</select>
-        <input value={draft} maxLength={600} onChange={(e) => setDraft(e.target.value)} placeholder="Share a lesson, a question or how you manage this strategy…" aria-label="Write a post" />
-        <button className="solid-button" type="submit" disabled={!draft.trim()}>Post</button>
-      </form>
-      {message && <p className="auth-error" role="alert">{message}</p>}
-      <small className="disclaimer">Share experience, not signals. No links, contact details or trade-copying requests. Nothing here is financial advice.</small>
-      <div className="post-list">
-        {data.posts.length === 0 && <p className="muted">No posts yet for these strategies.</p>}
-        {data.posts.map((post) => (
-          <article key={post.id} className="community-post">
-            <div className="journal-entry-heading"><div><b>@{post.handle}</b> <span className="auto-pill">{post.strategy}</span></div><time dateTime={post.created_at}>{formatDateTime(post.created_at)}</time></div>
-            <p>{post.body}</p>
-            {post.replies.map((r) => <p key={r.id} className="community-reply"><b>@{r.handle}</b> {r.body} {r.mine && <button className="text-action" onClick={() => void act(() => api(token, `/api/community/posts/${r.id}`, { method: "DELETE" }))}>Delete</button>}</p>)}
-            <div className="snapshot-actions">
-              <button className="text-action" onClick={() => setReplyFor(replyFor === post.id ? "" : post.id)}>Reply</button>
-              {post.mine ? <button className="text-action" onClick={() => void act(() => api(token, `/api/community/posts/${post.id}`, { method: "DELETE" }))}>Delete</button> : <button className="text-action" onClick={() => void act(() => api(token, `/api/community/posts/${post.id}/report`, { method: "POST" }), () => setMessage("Thanks, we received your report."))}>Report</button>}
-            </div>
-            {replyFor === post.id && <form className="trade-convo-form" onSubmit={(e) => { e.preventDefault(); void act(() => api(token, "/api/community/posts", { method: "POST", body: JSON.stringify({ body: replyText, parent_id: post.id }) }), () => { setReplyText(""); setReplyFor(""); }); }}><input value={replyText} maxLength={600} onChange={(e) => setReplyText(e.target.value)} placeholder="Write a reply…" aria-label="Write a reply" /><button className="solid-button" type="submit" disabled={!replyText.trim()}>Reply</button></form>}
-          </article>
-        ))}
-      </div>
-    </section>
   );
 }

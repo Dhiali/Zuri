@@ -276,15 +276,34 @@ class OnboardingTests(unittest.TestCase):
             self.assertIn("target", step)
 
     def test_tours_cover_dashboard_features_and_broker_setup(self):
+        detailed_steps = za.build_walkthrough("site_tour", {"detail": "detailed"}, AVAILABLE)["steps"]
+        picker = [s for s in detailed_steps if s["target"] == "chart-welcome"]
+        self.assertEqual(len(picker), 1)
+        self.assertTrue(picker[0]["needs_market"])
+        order = [s["target"] for s in detailed_steps]
+        self.assertLess(order.index("chart-welcome"), order.index("chart-timeframes"))
         for detail in ("quick", "detailed"):
             targets = [s["target"] for s in za.build_walkthrough("site_tour", {"detail": detail}, AVAILABLE)["steps"]]
-            for target in ("dash-weekly", "dash-learn", "dash-community"):
+            for target in ("dash-weekly", "dash-learn"):
                 self.assertIn(target, targets)
         detailed = za.build_walkthrough("site_tour", {"detail": "detailed"}, AVAILABLE)["steps"]
         for target in ("news-charts", "chart-scanners", "chart-backtest", "chart-backtest-history"):
             self.assertIn(target, [s["target"] for s in detailed])
-        self.assertIn("Connect your account", [s["title"] for s in detailed])
+        self.assertIn("Step 6 of 7: Paste your keys", [s["title"] for s in detailed])
         self.assertIn("trade-ticket", [s["target"] for s in detailed])
+        self.assertIn("trade-convo", [s["target"] for s in detailed])
+        self.assertIn("journal-insights", [s["target"] for s in detailed])
+        for target in ("history-log", "history-tabs", "history-snapshots"):
+            self.assertIn(target, [s["target"] for s in detailed])
+        sections = [s["section"] for s in detailed]
+        self.assertLess(sections.index("History"), sections.index("Journal"))
+        quick = za.build_walkthrough("site_tour", {"detail": "quick"}, AVAILABLE)["steps"]
+        self.assertIn("nav-History", [s["target"] for s in quick])
+        for target in ("history-log", "history-tabs", "history-snapshots"):
+            self.assertIn(target, [s["target"] for s in detailed])
+        order = [s["section"] for s in detailed]
+        self.assertLess(order.index("History"), order.index("Journal"))
+        self.assertIn("nav-History", [s["target"] for s in quick])
         self.assertIn("nav-Journal", [s["target"] for s in detailed])
 
     def test_involvement_levels(self):
@@ -314,6 +333,62 @@ class MarketLayoutTests(unittest.TestCase):
         self.assertEqual(layout["markets"][0]["level"], "learning")
 
 
+class JourneyStageTests(unittest.TestCase):
+    base = {"broker_linked": True, "risk_limits_set": True, "watchlist_count": 2, "trades_recorded": 0, "closed_trades": None, "journal_notes": 0}
+
+    def stage(self, **changes):
+        return za.journey_stage({**self.base, **changes})["id"]
+
+    def test_stages_follow_the_path_to_a_first_trade(self):
+        self.assertEqual(self.stage(broker_linked=False), "connect")
+        self.assertEqual(self.stage(risk_limits_set=False), "protect")
+        self.assertEqual(self.stage(watchlist_count=0), "pick_market")
+        self.assertEqual(self.stage(), "first_trade")
+        self.assertEqual(self.stage(trades_recorded=2), "learn")
+        self.assertEqual(self.stage(trades_recorded=30, closed_trades=12), "improve")
+
+    def test_every_stage_has_a_valid_fallback_and_it_is_allowed(self):
+        for stage_id, stage in za._STAGES.items():
+            move = za.stage_fallback(stage_id, {})
+            self.assertIn(move["goal"], stage["allowed"], stage_id)
+            if move["goal"] != "talk":
+                self.assertTrue(za.build_walkthrough(move["goal"], {}, ["BTCUSD"]), stage_id)
+
+    def test_signals_read_from_the_snapshot_and_money_is_never_promised(self):
+        signals = za.stage_signals({"broker_linked": {"name": "x"}, "risk_limits": {"max_trade_risk_percent": 1}, "watchlist": ["BTCUSD"], "activity_counts": {"order_placed": 1}})
+        self.assertEqual(za.journey_stage(signals)["id"], "learn")
+        self.assertEqual(za.stage_signals({"broker_linked": "no broker linked yet", "watchlist": "empty"})["broker_linked"], False)
+        self.assertIn("Never promise", za.stage_directive(za.journey_stage(signals)))
+
+    def test_first_trade_walkthrough_ends_with_the_user_pressing_send(self):
+        tour = za.build_walkthrough("first_trade", {}, [])
+        self.assertEqual(tour["id"], "first_trade")
+        self.assertEqual(tour["steps"][-1]["title"], "You press send")
+
+    def test_broker_walkthrough_says_where_to_go_and_what_to_click(self):
+        steps = za.build_walkthrough("link_broker", {}, [])["steps"]
+        links = [link["url"] for s in steps for link in s.get("links", [])]
+        self.assertIn(za.ALPACA_SIGNUP, links)
+        self.assertIn(za.ALPACA_PAPER, links)
+        self.assertTrue(all(url.startswith("https://") for url in links))
+        text = " ".join(s["title"] + s["body"] + " ".join(s.get("how", [])) for s in steps)
+        for phrase in ("Generate New Keys", "Link account", "Verify and link", "Paper"):
+            self.assertIn(phrase, text)
+        self.assertEqual(steps[5]["target"], "broker-form")
+
+    def test_every_walkthrough_step_says_exactly_what_to_click(self):
+        for goal, params in (("open_chart", {"symbol": "BTCUSD"}), ("analyze_chart", {"symbol": "BTCUSD"}), ("add_to_watchlist", {"symbol": "BTCUSD"}),
+                             ("set_risk_limits", {}), ("first_trade", {}), ("write_journal", {}), ("link_broker", {}),
+                             ("site_tour", {"detail": "quick"}), ("site_tour", {"detail": "detailed"})):
+            for step in za.build_walkthrough(goal, params, ["BTCUSD"])["steps"]:
+                self.assertTrue(step.get("how"), f"{goal}: {step['title']} has no click-by-click steps")
+
+    def test_tours_hand_over_to_zuri_on_the_next_move_card(self):
+        for detail in ("quick", "detailed"):
+            steps = za.build_walkthrough("site_tour", {"detail": detail}, [])["steps"]
+            self.assertEqual(steps[-1]["target"], "zuri-next")
+
+
 class NextStepTests(unittest.TestCase):
     def _decide(self, model_answer):
         from unittest import mock
@@ -333,10 +408,23 @@ class NextStepTests(unittest.TestCase):
     def test_talk_needs_a_chat_prompt_and_chart_goals_need_a_real_symbol(self):
         talk = self._decide({"headline": "Review your loss", "why": "x", "goal": "talk", "chat_prompt": "Help me review my last loss."})
         self.assertIsNone(talk["primary"]["walkthrough"])
-        with self.assertRaises(main.HTTPException):
-            self._decide({"headline": "Chart", "why": "x", "goal": "open_chart", "symbol": "NOTREAL"})
-        with self.assertRaises(main.HTTPException):
-            self._decide({"headline": "Bad", "why": "x", "goal": "place_paper_trade"})
+        # an unusable model answer falls back to the stage's own move instead of failing
+        bad = self._decide({"headline": "Chart", "why": "x", "goal": "open_chart", "symbol": "NOTREAL"})
+        self.assertEqual(bad["primary"]["goal"], "link_broker")
+
+    def test_goals_that_do_not_serve_the_stage_are_replaced(self):
+        # no broker: the model's off-stage choice is overridden by the fallback
+        result = self._decide({"headline": "Write", "why": "x", "goal": "write_journal"})
+        self.assertEqual(result["primary"]["goal"], "link_broker")
+
+    def test_model_outage_uses_the_stage_fallback(self):
+        from unittest import mock
+        with mock.patch.object(main, "build_journey_snapshot", return_value={}), mock.patch.object(main, "build_memory_context", return_value={}), \
+             mock.patch.object(main, "_coaching_bundle", return_value={"status": "no_broker"}), mock.patch.object(main, "_safe_rows", return_value=[]), \
+             mock.patch.object(main, "_ask_json", side_effect=main.HTTPException(status_code=502, detail="down")):
+            result = main._decide_next_step("u", "")
+        self.assertEqual(result["primary"]["goal"], "link_broker")
+        self.assertTrue(result["primary"]["why"])
 
     def test_layout_and_review_rules_reach_the_prompt(self):
         from unittest import mock

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { backendUrl } from "./linked-account";
 
 export type WalkthroughStep = {
@@ -12,6 +12,9 @@ export type WalkthroughStep = {
   symbol?: string;
   timeframe?: string;
   prefill?: { search?: string; max_trade_risk_percent?: number; max_daily_loss_percent?: number };
+  needs_market?: boolean;
+  how?: string[];
+  links?: { label: string; url: string }[];
 };
 export type Walkthrough = { id: string; title: string; steps: WalkthroughStep[] };
 export type ZuriAction = { id: string; type: string; args: Record<string, unknown>; label: string; at?: number };
@@ -112,23 +115,34 @@ export function ZuriTradeCard({ action, broker, environment, riskLimit, onConfir
 }
 
 // Zuri takes over the screen: dims it, spotlights the real control and walks the user through, applying each step for them.
-export function ZuriTakeover({ walkthrough, onApplyStep, onClose }: {
+export function ZuriTakeover({ walkthrough, watchlistEmpty, onApplyStep, onClose }: {
   walkthrough: Walkthrough;
+  watchlistEmpty: boolean;
   onApplyStep: (step: WalkthroughStep) => void;
   onClose: (finished: boolean) => void;
 }) {
   const [index, setIndex] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
-  const step = walkthrough.steps[index];
-  const last = index === walkthrough.steps.length - 1;
+  // Decided once when the tour starts, so picking a market mid-tour does not shift the steps.
+  const [steps] = useState(() => walkthrough.steps.filter((item) => !item.needs_market || watchlistEmpty));
+  const step = steps[index];
+  const last = index === steps.length - 1;
 
   useEffect(() => { onApplyStep(step); }, [step, onApplyStep]);
 
   useEffect(() => {
+    let scrolledTo: Element | null = null;
     const measure = () => {
       const element = document.querySelector<HTMLElement>(`[data-zuri-target="${step.target}"]`);
       if (!element) { setRect(null); return; }
-      element.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const before = element.getBoundingClientRect();
+      // Bring an off-screen target into view once, so the user can still scroll afterwards.
+      if (scrolledTo !== element) {
+        scrolledTo = element;
+        if (before.top < 0 || before.bottom > window.innerHeight || before.left < 0 || before.right > window.innerWidth) {
+          element.scrollIntoView({ block: before.height > window.innerHeight * 0.7 ? "start" : "center", inline: "nearest" });
+        }
+      }
       const box = element.getBoundingClientRect();
       setRect((current) => (current && current.top === box.top && current.left === box.left && current.width === box.width && current.height === box.height ? current : { top: box.top, left: box.left, width: box.width, height: box.height }));
     };
@@ -144,19 +158,72 @@ export function ZuriTakeover({ walkthrough, onApplyStep, onClose }: {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const cardStyle: React.CSSProperties = rect
-    ? (rect.top + rect.height + 220 < window.innerHeight
-      ? { top: rect.top + rect.height + 14, left: Math.min(Math.max(12, rect.left), window.innerWidth - 372) }
-      : { top: Math.max(12, rect.top - 214), left: Math.min(Math.max(12, rect.left), window.innerWidth - 372) })
-    : { top: "40%", left: "50%", transform: "translateX(-50%)" };
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<{ step: number; x: number; y: number } | null>(null);
+  const dragStart = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
+  const offset = drag && drag.step === index ? drag : { x: 0, y: 0 };
+  const [view, setView] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  const [cardH, setCardH] = useState(220);
+
+  useEffect(() => {
+    const onResize = () => setView({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const hasTarget = rect !== null;
+  useEffect(() => {
+    const height = cardRef.current?.offsetHeight;
+    if (height) setCardH(height);
+  }, [index, hasTarget]);
+
+  const MARGIN = 12;
+  const cardW = Math.min(360, view.w - 2 * MARGIN);
+  const clampX = (x: number) => Math.min(Math.max(MARGIN, x), view.w - cardW - MARGIN);
+  const clampY = (y: number) => Math.min(Math.max(MARGIN, y), view.h - cardH - MARGIN);
+  const place = (): { top: number; left: number } => {
+    if (!rect) return { top: clampY(view.h - cardH - 28), left: clampX((view.w - cardW) / 2) };
+    const gap = 16;
+    const centreX = rect.left + rect.width / 2 - cardW / 2;
+    const centreY = rect.top + rect.height / 2 - cardH / 2;
+    const candidates = [
+      { top: rect.top + rect.height + gap, left: centreX },
+      { top: rect.top - cardH - gap, left: centreX },
+      { top: centreY, left: rect.left - cardW - gap },
+      { top: centreY, left: rect.left + rect.width + gap },
+    ];
+    const fits = (c: { top: number; left: number }) => c.top >= MARGIN && c.left >= MARGIN && c.top + cardH <= view.h - MARGIN && c.left + cardW <= view.w - MARGIN;
+    const spot = candidates.find(fits);
+    if (spot) return { top: spot.top, left: clampX(spot.left) };
+    // Nothing fits beside the target (it fills the screen): park in the bottom corner on the side away from its centre.
+    const targetOnLeft = rect.left + rect.width / 2 < view.w / 2;
+    return { top: clampY(view.h - cardH - 28), left: targetOnLeft ? view.w - cardW - MARGIN : MARGIN };
+  };
+  const base = place();
+  const cardStyle: React.CSSProperties = { top: clampY(base.top + offset.y), left: clampX(base.left + offset.x) };
+
+  const startDrag = (event: React.PointerEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragStart.current = { px: event.clientX, py: event.clientY, x: offset.x, y: offset.y };
+  };
+  const moveDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const start = dragStart.current;
+    if (!start) return;
+    setDrag({ step: index, x: start.x + event.clientX - start.px, y: start.y + event.clientY - start.py });
+  };
+  const endDrag = () => { dragStart.current = null; };
 
   return (
     <div className="zuri-takeover" role="dialog" aria-label={`Zuri guide: ${walkthrough.title}`}>
       {rect ? <div className="zuri-spot" style={{ top: rect.top - 6, left: rect.left - 6, width: rect.width + 12, height: rect.height + 12 }} /> : <div className="zuri-dim" />}
-      <div className="zuri-takeover-card" style={cardStyle}>
-        <span className="zuri-takeover-kicker">ZURI IS GUIDING YOU · {index + 1}/{walkthrough.steps.length}</span>
+      <div className="zuri-takeover-card" ref={cardRef} style={cardStyle}>
+        <span className="zuri-takeover-kicker zuri-drag-handle" title="Drag to move" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>⠿ ZURI IS GUIDING YOU · {index + 1}/{steps.length} · DRAG TO MOVE</span>
         <h3>{step.title}</h3>
         <p>{step.body}</p>
+        {step.how && step.how.length > 0 && <ol className="zuri-takeover-how">{step.how.map((line) => <li key={line}>{line}</li>)}</ol>}
+        {step.links && step.links.length > 0 && <div className="zuri-takeover-links">{step.links.filter((link) => link.url.startsWith("https://")).map((link) => <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">{link.label} ↗</a>)}</div>}
+        {!rect && !step.needs_market && <p className="zuri-takeover-note">This part of the screen isn&apos;t showing yet, so there is nothing to highlight. It appears once you add a market or link a broker.</p>}
         <div className="zuri-takeover-actions">
           <button type="button" className="zuri-ghost" onClick={() => onClose(false)}>Exit</button>
           <span />
