@@ -1379,6 +1379,7 @@ def parse_and_execute_trade(request: UserPrompt, user: dict = Depends(require_au
     if shares < 1:
         shares = 1
 
+    _check_trading_rules(user["id"], adapter, ticker, action.lower(), shares, {"action": "entry", "price": current_price, "equity": equity}, stop_loss)
     order = adapter.place_order(ticker, action.lower(), shares, stop_loss, take_profit)
     _capture_trade(user["id"], "order_placed", ticker, action.lower(), shares, row["broker"], row["environment"],
                    {"action": "entry", "price": current_price, "equity": equity, "stop_loss": stop_loss, "take_profit": take_profit}, adapter=adapter)
@@ -1542,6 +1543,7 @@ def place_broker_order(broker: str, request: BrokerOrderRequest, user: dict = De
             raise HTTPException(status_code=400, detail="Stop loss and take profit must both be set on the correct sides of the current price.")
         stop_loss, take_profit = request.stop_loss, request.take_profit
         context["stop_loss"], context["take_profit"] = stop_loss, take_profit
+    _check_trading_rules(user["id"], adapter, symbol, request.side, request.quantity, context, stop_loss)
     result = adapter.place_order(symbol, request.side, request.quantity, stop_loss, take_profit)
     logger.info("User %s placed %s %s order on %s (%s).", user["id"], request.side, request.symbol, broker, row["environment"])
     _capture_trade(user["id"], "order_placed", symbol, request.side, request.quantity, broker, row["environment"], context, adapter=adapter)
@@ -1686,6 +1688,27 @@ def _service_request(table: str, method: str, params: dict | None = None, **kwar
         logger.error("Storage request to %s returned HTTP %s.", table, response.status_code)
         raise HTTPException(status_code=503, detail="Journal storage failed. Apply the latest Supabase migration.")
     return response.json() if response.content else []
+
+
+def _check_trading_rules(user_id: str, adapter, symbol: str, side: str, quantity: float, context: dict, stop_loss: float | None) -> None:
+    """Enforces the limits the user set in Settings on every new position, whoever or whatever asked for the order."""
+    if context.get("action") != "entry":
+        return
+    rules = (_safe_rows("user_preferences", {"select": "max_open_positions,max_trade_risk_percent", "user_id": f"eq.{user_id}"}) or [{}])[0]
+    try:
+        held = adapter.positions()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Zuri could not check your open positions, so the order was not sent.") from e
+    open_count = sum(1 for p in held if p.get("quantity"))
+    limit = rules.get("max_open_positions")
+    if isinstance(limit, (int, float)) and open_count >= limit:
+        raise HTTPException(status_code=400, detail=f"You set a limit of {int(limit)} open positions in Settings and you already have {open_count}. Close one or raise the limit first.")
+    max_risk = rules.get("max_trade_risk_percent")
+    price, equity = context.get("price"), context.get("equity")
+    if isinstance(max_risk, (int, float)) and max_risk > 0 and stop_loss and price and equity:
+        risk_percent = quantity * abs(price - stop_loss) / equity * 100
+        if risk_percent > max_risk * 1.05:
+            raise HTTPException(status_code=400, detail=f"This order risks about {risk_percent:.2f}% of your account, above your {max_risk}% per-trade limit in Settings. Reduce the size or move the stop closer.")
 
 
 def _pre_trade_context(adapter, symbol: str, side: str) -> dict:

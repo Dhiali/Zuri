@@ -405,6 +405,30 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(context["action"], "exit")
         self.assertEqual(context["pl_per_unit"], 2.0)
 
+    def _order(self, rules, held, body=None):
+        adapter = SimpleNamespace(
+            place_order=lambda *a: {"order_id": "1", "status": "accepted"},
+            account=lambda: {"equity": 1000.0},
+            price=lambda s: 10.0,
+            positions=lambda: held,
+        )
+        body = body or {"symbol": "AAPL", "side": "buy", "quantity": 5, "confirmed": True}
+        with patch("backend.main._load_connection", return_value=({"environment": "paper"}, adapter)), \
+             patch("backend.main._safe_rows", return_value=[rules]):
+            return self.client.post("/api/brokers/alpaca/orders", json=body)
+
+    def test_settings_limits_are_enforced_on_orders(self):
+        held = [{"symbol": "TSLA", "side": "long", "quantity": 1.0}, {"symbol": "MSFT", "side": "long", "quantity": 1.0}]
+        self.assertEqual(self._order({"max_open_positions": 2}, held).status_code, 400)
+        self.assertEqual(self._order({"max_open_positions": 3}, held).status_code, 200)
+        # risk: 5 units, stop 1.0 below a price of 10 = 5 at risk on a 1000 account is 0.5%
+        risky = {"symbol": "AAPL", "side": "buy", "quantity": 5, "confirmed": True, "stop_loss": 9.0, "take_profit": 12.0}
+        self.assertEqual(self._order({"max_trade_risk_percent": 0.1}, [], risky).status_code, 400)
+        self.assertEqual(self._order({"max_trade_risk_percent": 1.0}, [], risky).status_code, 200)
+        # closing a position is never blocked by the open-position cap
+        sell = {"symbol": "TSLA", "side": "sell", "quantity": 1, "confirmed": True}
+        self.assertEqual(self._order({"max_open_positions": 2}, held, sell).status_code, 200)
+
     def test_journal_analytics_find_leaks(self):
         from backend.journal import compute_stats
 
@@ -448,8 +472,8 @@ class BrokerTests(unittest.TestCase):
             self.assertEqual(brokers.decrypt_credentials(row["credentials_encrypted"])["api_key"], "k")
 
     def test_order_requires_confirmation(self):
-        adapter = SimpleNamespace(place_order=lambda *a: {"order_id": "1", "status": "accepted"})
-        with patch("backend.main._load_connection", return_value=({"environment": "paper"}, adapter)):
+        adapter = SimpleNamespace(place_order=lambda *a: {"order_id": "1", "status": "accepted"}, positions=lambda: [])
+        with patch("backend.main._load_connection", return_value=({"environment": "paper"}, adapter)), patch("backend.main._safe_rows", return_value=[]):
             body = {"symbol": "AAPL", "side": "buy", "quantity": 1}
             self.assertEqual(self.client.post("/api/brokers/alpaca/orders", json=body).status_code, 400)
             self.assertEqual(self.client.post("/api/brokers/alpaca/orders", json={**body, "confirmed": True}).status_code, 200)
@@ -496,8 +520,8 @@ class BrokerTests(unittest.TestCase):
         self.assertIn("Alpaca paper", _journey_prompt(None, ""))
 
     def test_live_order_requires_phrase(self):
-        adapter = SimpleNamespace(place_order=lambda *a: {"order_id": "1", "status": "accepted"})
-        with patch("backend.main._load_connection", return_value=({"environment": "live"}, adapter)):
+        adapter = SimpleNamespace(place_order=lambda *a: {"order_id": "1", "status": "accepted"}, positions=lambda: [])
+        with patch("backend.main._load_connection", return_value=({"environment": "live"}, adapter)), patch("backend.main._safe_rows", return_value=[]):
             body = {"symbol": "AAPL", "side": "buy", "quantity": 1, "confirmed": True}
             self.assertEqual(self.client.post("/api/brokers/alpaca/orders", json=body).status_code, 400)
             ok = self.client.post(

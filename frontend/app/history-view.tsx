@@ -1,4 +1,5 @@
 "use client";
+import { formatDateTime } from "./time-zone";
 
 import { useEffect, useState } from "react";
 import { backendUrl, formatMoney, type LinkedAccountState } from "./linked-account";
@@ -11,7 +12,7 @@ type Tab = "closed" | "orders" | "open";
 type Period = "Today" | "Last week" | "Last month" | "Last 3 months" | "Last 6 months" | "All time";
 
 const periodDays: Record<Period, number | null> = { Today: 1, "Last week": 7, "Last month": 30, "Last 3 months": 90, "Last 6 months": 180, "All time": null };
-const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
+const when = (iso: string | null) => (iso ? formatDateTime(iso) : "—");
 
 export function HistoryView({ linked, token, refreshKey }: { linked: LinkedAccountState; token: string; refreshKey: number }) {
   const [tab, setTab] = useState<Tab>("closed");

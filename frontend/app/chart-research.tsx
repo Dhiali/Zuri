@@ -1,4 +1,5 @@
 "use client";
+import { formatDateTime } from "./time-zone";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backendUrl } from "./linked-account";
@@ -269,7 +270,7 @@ export function ChartResearch({
                   ...item,
                   lastSignalAt: freshSignal.time,
                   lastScannedAt: latestBarTime,
-                  lastAlert: `${new Date(freshSignal.time).toLocaleString()} · ${direction} ${item.condition.replaceAll("_", " ")} condition`,
+                  lastAlert: `${formatDateTime(freshSignal.time)} · ${direction} ${item.condition.replaceAll("_", " ")} condition`,
                   status: "Monitoring",
                 };
               }
@@ -433,7 +434,7 @@ export function ChartResearch({
           <div><span className="small-label">BROKER CANDLES · HISTORICAL SIGNAL REVIEW</span><h2 id="backtest-title">Backtest a setup or event</h2><p>Use actual candles from your connected broker for this pair and date range.</p></div>
           <span className="chart-research-icon" aria-hidden="true">↶</span>
         </div>
-        {eventContext && <p className="chart-research-notice">Selected story{eventContext.published_at ? ` · published ${new Date(eventContext.published_at).toLocaleString()}` : ""}. Set a date range that includes the event window; news is not automatically matched to candles. <button className="text-action" type="button" onClick={() => { setEventLabel(""); onClearEventContext(); }}>Clear</button></p>}
+        {eventContext && <p className="chart-research-notice">Selected story{eventContext.published_at ? ` · published ${formatDateTime(eventContext.published_at)}` : ""}. Set a date range that includes the event window; news is not automatically matched to candles. <button className="text-action" type="button" onClick={() => { setEventLabel(""); onClearEventContext(); }}>Clear</button></p>}
         <div className="backtest-fields">
           <label className="field-label">Pair / symbol<input value={selectedResearchSymbol} maxLength={20} onChange={(event) => setResearchSymbol(event.target.value.toUpperCase())} /></label>
           <label className="field-label">Event or context label<input value={selectedEventLabel} maxLength={500} onChange={(event) => { setEventLabel(event.target.value); onClearEventContext(); }} placeholder="Optional · e.g. CPI week" /></label>
@@ -456,7 +457,7 @@ export function ChartResearch({
           <div className="backtest-metrics"><div><span>Broker candles</span><b>{backtestResult.bars.toLocaleString()}</b></div><div><span>Completed signals</span><b>{backtestResult.signalCount.toLocaleString()}</b></div><div><span>Average {backtestResult.holdBars}-bar return</span><b className={backtestResult.averageReturn >= 0 ? "positive" : "negative"}>{backtestResult.averageReturn >= 0 ? "+" : ""}{backtestResult.averageReturn.toFixed(2)}%</b></div><div><span>Positive outcomes</span><b>{backtestResult.winRate.toFixed(1)}%</b></div></div>
           <p className="backtest-source">{backtestResult.broker} data · {selectedResearchSymbol} · {timeframe}{selectedEventLabel.trim() ? ` · ${selectedEventLabel.trim()}` : ""}{backtestResult.truncated ? " · provider candle limit reached" : ""}</p>
           {backtestResult.signalCount > backtestResult.signals.length && <p className="backtest-source">Showing the most recent {backtestResult.signals.length} of {backtestResult.signalCount} completed signals.</p>}
-          {backtestResult.signals.length > 0 && <div className="table-scroll"><table><thead><tr><th>Signal time</th><th>Direction</th><th>Next-candle entry / fixed-hold result</th></tr></thead><tbody>{backtestResult.signals.map((signal) => <tr key={`${signal.time}-${signal.direction}`}><td>{new Date(signal.time).toLocaleString()}</td><td>{signal.direction}</td><td className={(signal.returnPct ?? 0) >= 0 ? "positive" : "negative"}>{(signal.returnPct ?? 0) >= 0 ? "+" : ""}{(signal.returnPct ?? 0).toFixed(2)}%</td></tr>)}</tbody></table></div>}
+          {backtestResult.signals.length > 0 && <div className="table-scroll"><table><thead><tr><th>Signal time</th><th>Direction</th><th>Next-candle entry / fixed-hold result</th></tr></thead><tbody>{backtestResult.signals.map((signal) => <tr key={`${signal.time}-${signal.direction}`}><td>{formatDateTime(signal.time)}</td><td>{signal.direction}</td><td className={(signal.returnPct ?? 0) >= 0 ? "positive" : "negative"}>{(signal.returnPct ?? 0) >= 0 ? "+" : ""}{(signal.returnPct ?? 0).toFixed(2)}%</td></tr>)}</tbody></table></div>}
           {backtestResult.signalCount === 0 && <p className="muted">No completed signals matched this rule in the selected history.</p>}
         </div>}
         <p className="backtest-disclaimer">Historical signals are not a simulation of fills and exclude fees, slippage, spreads, and event-time matching. Past results do not predict future performance or guarantee profit.</p>

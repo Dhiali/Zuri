@@ -1271,3 +1271,5 @@ td b { font-weight: 580; }
 .aura-compose textarea { font-size: 13px; min-height: 40px; max-height: 140px; resize: none; }
 .aura-compose button { width: 34px; height: 34px; flex-basis: 34px; border-radius: 10px; }
 .aura-disclaimer { font-size: 10px; padding-bottom: 12px; }
+
+.panic-confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }

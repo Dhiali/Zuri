@@ -1,4 +1,5 @@
 "use client";
+import { formatDateTime } from "./time-zone";
 
 import { useCallback, useEffect, useState } from "react";
 import { backendUrl } from "./linked-account";
@@ -197,7 +198,7 @@ export function CommunityPanel({ token, suggestedTags }: { token: string; sugges
         {data.posts.length === 0 && <p className="muted">No posts yet for these strategies.</p>}
         {data.posts.map((post) => (
           <article key={post.id} className="community-post">
-            <div className="journal-entry-heading"><div><b>@{post.handle}</b> <span className="auto-pill">{post.strategy}</span></div><time dateTime={post.created_at}>{new Date(post.created_at).toLocaleString()}</time></div>
+            <div className="journal-entry-heading"><div><b>@{post.handle}</b> <span className="auto-pill">{post.strategy}</span></div><time dateTime={post.created_at}>{formatDateTime(post.created_at)}</time></div>
             <p>{post.body}</p>
             {post.replies.map((r) => <p key={r.id} className="community-reply"><b>@{r.handle}</b> {r.body} {r.mine && <button className="text-action" onClick={() => void act(() => api(token, `/api/community/posts/${r.id}`, { method: "DELETE" }))}>Delete</button>}</p>)}
             <div className="snapshot-actions">

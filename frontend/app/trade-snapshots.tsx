@@ -1,4 +1,5 @@
 "use client";
+import { formatDateTime } from "./time-zone";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickSeries, ColorType, LineStyle, createChart, createSeriesMarkers, type UTCTimestamp } from "lightweight-charts";
@@ -166,7 +167,7 @@ function SnapshotCard({ snapshot, token, onChanged }: { snapshot: TradeSnapshot;
     <article className="content-card snapshot-card">
       <div className="journal-entry-heading">
         <div><span className="small-label">{kindName[snapshot.kind].toUpperCase()} SNAPSHOT · 15m</span><h3>{snapshot.symbol} {snapshot.side && <span className={`side-pill ${snapshot.side === "sell" ? "short" : "long"}`}>{snapshot.side === "sell" ? "Sell" : "Buy"}</span>}</h3></div>
-        <div className="journal-entry-actions"><time dateTime={snapshot.created_at}>{new Date(snapshot.created_at).toLocaleString()}</time><button className="text-action" onClick={() => void run("delete", async () => { await api(token, `/api/snapshots/${snapshot.id}`, { method: "DELETE" }); onChanged(); })}>Delete</button></div>
+        <div className="journal-entry-actions"><time dateTime={snapshot.created_at}>{formatDateTime(snapshot.created_at)}</time><button className="text-action" onClick={() => void run("delete", async () => { await api(token, `/api/snapshots/${snapshot.id}`, { method: "DELETE" }); onChanged(); })}>Delete</button></div>
       </div>
       <SnapshotChart snapshot={snapshot} reveal={reveal} onReady={onReady} />
       {reveal && typeof pl === "number" && <p className={pl >= 0 ? "positive" : "negative"}>Estimated result: {pl >= 0 ? "+" : ""}{pl.toFixed(2)}</p>}

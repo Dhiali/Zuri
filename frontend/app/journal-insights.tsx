@@ -1,4 +1,5 @@
 "use client";
+import { formatDateTime } from "./time-zone";
 
 import { useEffect, useRef, useState } from "react";
 import { backendUrl } from "./linked-account";
@@ -149,7 +150,7 @@ export function JournalInsights({ token, refreshKey, onEntriesChanged }: { token
       {timeline.length > 0 && (
         <details className="journal-timeline">
           <summary>Journey timeline ({timeline.length} latest events)</summary>
-          <ol>{[...timeline].reverse().map((item, index) => <li key={`${item.at}-${index}`}><time dateTime={item.at}>{new Date(item.at).toLocaleString()}</time> {kindLabel[item.kind] ?? item.kind}{item.symbol ? ` · ${item.symbol}` : ""}{item.side ? ` · ${item.side}` : ""}{item.quantity ? ` ×${item.quantity}` : ""}</li>)}</ol>
+          <ol>{[...timeline].reverse().map((item, index) => <li key={`${item.at}-${index}`}><time dateTime={item.at}>{formatDateTime(item.at)}</time> {kindLabel[item.kind] ?? item.kind}{item.symbol ? ` · ${item.symbol}` : ""}{item.side ? ` · ${item.side}` : ""}{item.quantity ? ` ×${item.quantity}` : ""}</li>)}</ol>
         </details>
       )}
     </section>

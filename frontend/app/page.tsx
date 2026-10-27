@@ -10,6 +10,7 @@ import { TradeConversation } from "./trade-conversation";
 import { SnapshotGallery, captureScreenForTrade } from "./trade-snapshots";
 import { ChartResearch } from "./chart-research";
 import { backendUrl, formatMoney, useLinkedAccount, type LinkedAccountState, type LinkedPosition } from "./linked-account";
+import { TIME_ZONE_NAMES, formatClock, formatDateTime, formatDeskDate, setActiveTimeZone } from "./time-zone";
 import {
   addJournalEntry,
   deleteJournalEntry,
@@ -152,10 +153,16 @@ function TradingWorkspace() {
   const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
   const watchlistSnapshot = JSON.stringify(watchlistSymbols);
   const [userPreferences, setUserPreferences] = useState<UserPreferences | null>(null);
+  setActiveTimeZone(userPreferences?.time_zone);
+
   const [workspaceDataUserId, setWorkspaceDataUserId] = useState<string | null>(null);
   const watchlistInstruments = instruments.filter((instrument) => watchlistSymbols.includes(instrument.symbol));
   const [selectedSymbol, setSelectedSymbol] = useState(initialInstruments[0].symbol);
   const [timeframe, setTimeframe] = useState("15m");
+  useEffect(() => {
+    if (!session?.user.id || workspaceDataUserId !== session.user.id || userPreferences?.save_chart_layout_enabled === false) return;
+    window.localStorage.setItem(`zuri.lastChart.${session.user.id}`, JSON.stringify({ symbol: selectedSymbol, timeframe }));
+  }, [session?.user.id, workspaceDataUserId, userPreferences?.save_chart_layout_enabled, selectedSymbol, timeframe]);
   const [activeTool, setActiveTool] = useState("");
   const [orderSide, setOrderSide] = useState<"Buy" | "Sell">("Buy");
   const [query, setQuery] = useState("");
@@ -242,18 +249,8 @@ function TradingWorkspace() {
   useEffect(() => {
     const updateDeskDate = () => {
       const now = new Date();
-      setDeskDate(new Intl.DateTimeFormat("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "2-digit",
-      }).format(now).toUpperCase());
-      setDeskTime(new Intl.DateTimeFormat("en-ZA", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hourCycle: "h23",
-        timeZoneName: "short",
-      }).format(now));
+      setDeskDate(formatDeskDate(now));
+      setDeskTime(formatClock(now));
     };
 
     updateDeskDate();
@@ -274,10 +271,14 @@ function TradingWorkspace() {
       setWatchlistSymbols(symbols);
       setJournalEntries(entries);
       setUserPreferences(preferences);
-      setSelectedSymbol(symbols.includes(preferences.default_symbol)
+      let remembered: { symbol?: string; timeframe?: string } = {};
+      try { remembered = JSON.parse(window.localStorage.getItem(`zuri.lastChart.${session.user.id}`) ?? "{}") as typeof remembered; } catch { /* nothing remembered */ }
+      const useRemembered = preferences.save_chart_layout_enabled !== false;
+      const startSymbol = useRemembered && remembered.symbol && symbols.includes(remembered.symbol) ? remembered.symbol : null;
+      setSelectedSymbol(startSymbol ?? (symbols.includes(preferences.default_symbol)
         ? preferences.default_symbol
-        : symbols[0] ?? initialInstruments[0].symbol);
-      setTimeframe(preferences.default_timeframe);
+        : symbols[0] ?? initialInstruments[0].symbol));
+      setTimeframe(useRemembered && remembered.timeframe && timeframes.includes(remembered.timeframe) ? remembered.timeframe : preferences.default_timeframe);
       setWorkspaceDataUserId(session.user.id);
       setDataError("");
     }).catch((loadError: unknown) => {
@@ -725,11 +726,13 @@ function TradingWorkspace() {
           {section === "Trade" && <TradeView symbol={symbol} instruments={instruments} orderSide={orderSide} setOrderSide={setOrderSide} linked={linkedAccount} token={session?.access_token ?? ""} onTraded={reloadJournal} riskPercent={userPreferences?.max_trade_risk_percent ?? 1}/>}
           {section === "History" && <HistoryView linked={linkedAccount} token={accessToken} refreshKey={journalRefresh} />}
           {section === "Journal" && <JournalView entries={journalEntries} token={accessToken} refreshKey={journalRefresh} onReload={reloadJournal} onNewEntry={() => { setSection("Charts"); setJournalDraftSide("Watching"); setJournalDraftOpen(true); }} onDelete={(id) => void removeJournalEntry(id)} />}
-          {section === "Settings" && session && <SettingsView request={settingsRequest} linked={linkedAccount} userId={session.user.id} email={session.user.email ?? ""} preferences={userPreferences} onSavePreferences={async (preferences) => {
+          {section === "Settings" && session && <SettingsView token={accessToken} request={settingsRequest} linked={linkedAccount} userId={session.user.id} email={session.user.email ?? ""} preferences={userPreferences} onSavePreferences={async (preferences) => {
             await saveUserPreferences(preferences);
+            const previous = userPreferences;
             setUserPreferences(preferences);
-            setTimeframe(preferences.default_timeframe);
-            if (watchlistSymbols.includes(preferences.default_symbol)) setSelectedSymbol(preferences.default_symbol);
+            // Only a changed default moves the chart; unrelated settings must not reset what you're looking at.
+            if (previous && previous.default_timeframe !== preferences.default_timeframe) setTimeframe(preferences.default_timeframe);
+            if (previous && previous.default_symbol !== preferences.default_symbol && watchlistSymbols.includes(preferences.default_symbol)) setSelectedSymbol(preferences.default_symbol);
           }} />}
           {session && workspaceDataUserId === session.user.id && <ChartResearch
             symbol={symbol.symbol}
@@ -1162,7 +1165,7 @@ function JournalView({ entries, token, refreshKey, onReload, onNewEntry, onDelet
       <JournalInsights token={token} refreshKey={refreshKey} onEntriesChanged={onReload} />
       {draftError && <p className="auth-message" role="alert">{draftError}</p>}
       {entries.length === 0 ? <div className="content-card journal-empty"><span className="small-label">NO ENTRIES YET</span><h3>Start with a chart idea</h3><p>Capture a setup, define your risk, and write down what would invalidate the trade.</p><button className="outline-button" onClick={onNewEntry}>Open chart and write a note</button></div> : <div className="journal-entry-list">{entries.map((entry) => <article className="content-card journal-entry" key={entry.id}>
-        <div className="journal-entry-heading"><div><span className="small-label">{entry.setup} · {entry.timeframe}</span><h3>{entry.symbol} <span className={`side-pill ${entry.side === "Short" ? "short" : entry.side === "Long" ? "long" : "watching"}`}>{entry.side}</span></h3></div><div className="journal-entry-actions"><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time><button className="text-action" onClick={() => onDelete(entry.id)} aria-label={`Delete ${entry.symbol} journal entry`}>Delete</button></div></div>
+        <div className="journal-entry-heading"><div><span className="small-label">{entry.setup} · {entry.timeframe}</span><h3>{entry.symbol} <span className={`side-pill ${entry.side === "Short" ? "short" : entry.side === "Long" ? "long" : "watching"}`}>{entry.side}</span></h3></div><div className="journal-entry-actions"><time dateTime={entry.createdAt}>{formatDateTime(entry.createdAt)}</time><button className="text-action" onClick={() => onDelete(entry.id)} aria-label={`Delete ${entry.symbol} journal entry`}>Delete</button></div></div>
         <p>{entry.note}</p>
         {entry.source === "auto" && <div className="journal-auto-row"><span className="auto-pill">AUTO-CAPTURED</span><button className="outline-button" disabled={draftingId === entry.id} onClick={() => void draftNote(entry.id)}>{draftingId === entry.id ? "Zuri is writing…" : "Ask Zuri to write the note"}</button></div>}
         {entry.source === "auto" && <SnapshotGallery token={token} refreshKey={refreshKey} entryId={entry.id} showControls={false} />}
@@ -1225,7 +1228,7 @@ function MarketNewsSection({
               <span className="market-news-source">{article.source}</span>
               <time dateTime={article.published_at ?? undefined}>
                 {article.published_at
-                  ? new Date(article.published_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+                  ? formatDateTime(article.published_at, { dateStyle: "medium", timeStyle: "short" })
                   : "Publication time unavailable"}
               </time>
               {article.market_wide && <span className="market-news-tag global">GLOBAL</span>}
@@ -1243,7 +1246,7 @@ function MarketNewsSection({
       </div>
       <div className="market-news-footer">
         <span>Sources: CNBC, BBC · headlines and excerpts link to publishers</span>
-        {news && <span>Updated {new Date(news.fetched_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} · refreshes every 5 min</span>}
+        {news && <span>Updated {formatDateTime(news.fetched_at, { hour: "2-digit", minute: "2-digit" })} · refreshes every 5 min</span>}
       </div>
       <p className="market-news-disclaimer">Headlines are not forecasts. Zuri’s explanation is an AI interpretation, not a prediction or financial advice.</p>
     </section>
@@ -1446,6 +1449,7 @@ function PositionsTable({ positions, currency }: { positions: LinkedPosition[]; 
   })}</tbody></table></div>;
 }
 function SettingsView({
+  token,
   userId,
   email,
   preferences,
@@ -1453,6 +1457,7 @@ function SettingsView({
   linked,
   request,
 }: {
+  token: string;
   linked: LinkedAccountState;
   request: { tab?: string; prefill?: WalkthroughStep["prefill"]; n: number } | null;
   userId: string;
@@ -1479,6 +1484,31 @@ function SettingsView({
   const [accountDeleteConfirmation, setAccountDeleteConfirmation] = useState("");
   const [accountDeleteBusy, setAccountDeleteBusy] = useState(false);
   const [accountDeleteError, setAccountDeleteError] = useState("");
+  const [panicOpen, setPanicOpen] = useState(false);
+  const [panicPhrase, setPanicPhrase] = useState("");
+  const [panicBusy, setPanicBusy] = useState(false);
+  const [panicError, setPanicError] = useState("");
+  const [panicMessage, setPanicMessage] = useState("");
+
+  const closeAll = async () => {
+    if (!linked.data) return;
+    setPanicBusy(true);
+    setPanicError("");
+    try {
+      const query = linked.data.environment === "live" ? `&confirmation_phrase=${encodeURIComponent(panicPhrase)}` : "";
+      const response = await fetch(`${backendUrl}/api/close-all?broker=${linked.data.broker}${query}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+      const body = await response.json().catch(() => ({})) as { detail?: unknown; message?: string };
+      if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Closing positions failed.");
+      setPanicMessage(body.message ?? "All pending orders were cancelled and open positions closed.");
+      setPanicOpen(false);
+      setPanicPhrase("");
+      linked.refresh();
+    } catch (closeError) {
+      setPanicError(closeError instanceof Error ? closeError.message : "Closing positions failed.");
+    } finally {
+      setPanicBusy(false);
+    }
+  };
   const tabs: SettingsTab[] = ["Account", "Broker", "Trading", "Risk", "Platform", "Display", "Security"];
 
   useEffect(() => {
@@ -1630,77 +1660,58 @@ function SettingsView({
       </>
     ),
     Broker: (
-      <>
-        <BrokerConnections onChange={linked.refresh} />
-        <div className="settings-section">
-          <span className="small-label">BROKER TOOLS</span>
-          <h3>Order routing</h3>
-          <div className="setting-row"><div><b>Smart routing</b><small>Use best available venue</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>One-click trading</b><small>Fast risk execution</small></div><input type="checkbox" defaultChecked /></div>
-          <div className="setting-row"><div><b>Show market depth</b><small>Liquidity ladder view</small></div><input type="checkbox" /></div>
-        </div>
-      </>
+      <BrokerConnections onChange={linked.refresh} />
     ),
     Trading: (
-      <>
-        <div className="settings-section">
-          <span className="small-label">ORDER SETTINGS</span>
-          <h3>Execution preferences</h3>
-          <div className="setting-row"><div><b>Order fill policy</b><small>Default execution handling</small></div><select value={preferencesDraft?.order_fill_policy ?? "FOK"} onChange={(event) => updatePreference("order_fill_policy", event.target.value)}><option>FOK</option><option>IOC</option><option>GTC</option><option>DAY</option></select></div>
-          <div className="setting-row"><div><b>Trade confirmation</b><small>Require review before submit</small></div><input type="checkbox" checked={preferencesDraft?.trade_confirmation_required ?? true} onChange={(event) => updatePreference("trade_confirmation_required", event.target.checked)} /></div>
-          <div className="setting-row"><div><b>Enable one-click trading</b><small>Fast manual execution</small></div><input type="checkbox" checked={preferencesDraft?.one_click_trading_enabled ?? true} onChange={(event) => updatePreference("one_click_trading_enabled", event.target.checked)} /></div>
-          <div className="setting-row"><div><b>Default order type</b><small>New order baseline</small></div><select value={preferencesDraft?.default_order_type ?? "Market"} onChange={(event) => updatePreference("default_order_type", event.target.value)}><option>Market</option><option>Limit</option><option>Stop</option><option>Stop Limit</option></select></div>
-        </div>
-        <div className="settings-section">
-          <span className="small-label">POSITION SETTINGS</span>
-          <h3>Trade management</h3>
-          <div className="setting-row"><div><b>Max open positions</b><small>Rolling cap per session</small></div><input type="number" min={1} max={100} value={preferencesDraft?.max_open_positions ?? 6} onChange={(event) => updatePreference("max_open_positions", Number(event.target.value))} /></div>
-          <div className="setting-row"><div><b>Allow hedging</b><small>Multi-directional positions</small></div><input type="checkbox" checked={preferencesDraft?.allow_hedging ?? false} onChange={(event) => updatePreference("allow_hedging", event.target.checked)} /></div>
-          <div className="setting-row"><div><b>Auto-close on stop</b><small>Close positions on risk breach</small></div><input type="checkbox" checked={preferencesDraft?.auto_close_on_stop ?? true} onChange={(event) => updatePreference("auto_close_on_stop", event.target.checked)} /></div>
-        </div>
-      </>
+      <div className="settings-section">
+        <span className="small-label">POSITION SETTINGS</span>
+        <h3>Trade management</h3>
+        <div className="setting-row"><div><b>Max open positions</b><small>Zuri and the order ticket refuse a new position above this number</small></div><input type="number" min={1} max={100} value={preferencesDraft?.max_open_positions ?? 6} onChange={(event) => updatePreference("max_open_positions", Math.min(100, Math.max(1, Math.round(Number(event.target.value) || 1))))} /></div>
+        <p className="muted">Every order needs your explicit confirmation, and live orders need the CONFIRM LIVE phrase. That safety can&apos;t be switched off.</p>
+      </div>
     ),
     Risk: (
-      <>
-        <div className="settings-section">
-          <span className="small-label">RISK CONTROLS</span>
-          <h3>Portfolio discipline</h3>
-          <div className="setting-row" data-zuri-target="risk-max-daily"><div><b>Max daily loss (%)</b><small>Hard stop across account</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_daily_loss_percent ?? 2} onChange={(event) => updatePreference("max_daily_loss_percent", Number(event.target.value))} /></div>
-          <div className="setting-row" data-zuri-target="risk-max-trade"><div><b>Max trade risk (%)</b><small>Per-trade position sizing cap</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_trade_risk_percent ?? 0.75} onChange={(event) => updatePreference("max_trade_risk_percent", Number(event.target.value))} /></div>
-          <div className="setting-row"><div><b>Max correlation exposure (%)</b><small>Risk concentration limit</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_correlation_exposure_percent ?? 35} onChange={(event) => updatePreference("max_correlation_exposure_percent", Number(event.target.value))} /></div>
-          <div className="setting-row"><div><b>Emergency close all</b><small>One-click panic liquidation</small></div><button className="danger-button" type="button">Close all</button></div>
+      <div className="settings-section">
+        <span className="small-label">RISK CONTROLS</span>
+        <h3>Portfolio discipline</h3>
+        <div className="setting-row" data-zuri-target="risk-max-daily"><div><b>Max daily loss (%)</b><small>Zuri warns you when today&apos;s losses reach this</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_daily_loss_percent ?? 2} onChange={(event) => updatePreference("max_daily_loss_percent", Number(event.target.value))} /></div>
+        <div className="setting-row" data-zuri-target="risk-max-trade"><div><b>Max trade risk (%)</b><small>Orders that risk more than this are refused</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_trade_risk_percent ?? 0.75} onChange={(event) => updatePreference("max_trade_risk_percent", Number(event.target.value))} /></div>
+        <div className="setting-row"><div><b>Emergency close all</b><small>{linked.data ? "Cancels pending orders and closes every open position" : "Link a broker to use this"}</small></div>
+          {!panicOpen ? <button className="danger-button" type="button" disabled={!linked.data} onClick={() => { setPanicOpen(true); setPanicError(""); setPanicMessage(""); }}>Close all</button> : (
+            <div className="panic-confirm">
+              {linked.data?.environment === "live" && <input value={panicPhrase} onChange={(event) => setPanicPhrase(event.target.value)} placeholder="Type CONFIRM LIVE" autoComplete="off" aria-label="Type CONFIRM LIVE" />}
+              <button className="danger-button" type="button" disabled={panicBusy || (linked.data?.environment === "live" && panicPhrase !== "CONFIRM LIVE")} onClick={() => void closeAll()}>{panicBusy ? "Closing…" : "Yes, close everything"}</button>
+              <button className="text-action" type="button" disabled={panicBusy} onClick={() => { setPanicOpen(false); setPanicPhrase(""); }}>Cancel</button>
+            </div>
+          )}
         </div>
-      </>
+        {panicError && <p className="auth-error" role="alert">{panicError}</p>}
+        {panicMessage && <p className="auth-message" role="status">{panicMessage}</p>}
+      </div>
     ),
     Platform: (
       <>
         <div className="settings-section">
           <span className="small-label">PLATFORM</span>
           <h3>Terminal behavior</h3>
-          <div className="setting-row"><div><b>Start at login</b><small>Open workspace automatically</small></div><input type="checkbox" checked={preferencesDraft?.start_at_login_enabled ?? true} onChange={(event) => updatePreference("start_at_login_enabled", event.target.checked)} /></div>
-          <div className="setting-row"><div><b>Save chart layout</b><small>Remember active chart templates</small></div><input type="checkbox" checked={preferencesDraft?.save_chart_layout_enabled ?? true} onChange={(event) => updatePreference("save_chart_layout_enabled", event.target.checked)} /></div>
-          <div className="setting-row"><div><b>Use Turbo mode</b><small>Reduced latency UI stream</small></div><input type="checkbox" checked={preferencesDraft?.turbo_mode_enabled ?? false} onChange={(event) => updatePreference("turbo_mode_enabled", event.target.checked)} /></div>
-          <div className="setting-row"><div><b>Auto-reconnect</b><small>Restore broker session</small></div><input type="checkbox" checked={preferencesDraft?.auto_reconnect_enabled ?? true} onChange={(event) => updatePreference("auto_reconnect_enabled", event.target.checked)} /></div>
+          <div className="setting-row"><div><b>Remember my chart</b><small>Reopen on the symbol and timeframe you last used</small></div><input type="checkbox" checked={preferencesDraft?.save_chart_layout_enabled ?? true} onChange={(event) => updatePreference("save_chart_layout_enabled", event.target.checked)} /></div>
         </div>
         <div className="settings-section">
           <span className="small-label">CHARTS</span>
           <h3>Workspace defaults</h3>
-          <div className="setting-row"><div><b>Default chart timeframe</b><small>When a new chart opens</small></div><select value={preferencesDraft?.default_timeframe ?? "15m"} onChange={(event) => updatePreference("default_timeframe", event.target.value)}><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option><option>1D</option><option>1W</option></select></div>
-          <div className="setting-row"><div><b>Default symbol</b><small>Initial instrument selected</small></div><select value={preferencesDraft?.default_symbol ?? "BTCUSD"} onChange={(event) => updatePreference("default_symbol", event.target.value)}>{initialInstruments.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.symbol}</option>)}</select></div>
+          <div className="setting-row"><div><b>Default chart timeframe</b><small>Used when nothing is remembered</small></div><select value={preferencesDraft?.default_timeframe ?? "15m"} onChange={(event) => updatePreference("default_timeframe", event.target.value)}><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option><option>1D</option><option>1W</option></select></div>
+          <div className="setting-row"><div><b>Default symbol</b><small>Used when nothing is remembered</small></div><select value={preferencesDraft?.default_symbol ?? "BTCUSD"} onChange={(event) => updatePreference("default_symbol", event.target.value)}>{initialInstruments.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.symbol}</option>)}</select></div>
         </div>
       </>
     ),
     Display: (
-      <>
-        <div className="settings-section">
-          <span className="small-label">DISPLAY</span>
-          <h3>Theme and layout</h3>
-          <div className="setting-row"><div><b>Language</b><small>Interface language</small></div><select value={preferencesDraft?.language ?? "English"} onChange={(event) => updatePreference("language", event.target.value)}><option>English</option><option>Deutsch</option><option>Français</option><option>Español</option></select></div>
-          <div className="setting-row"><div><b>Time zone</b><small>Display timestamps</small></div><select value={preferencesDraft?.time_zone ?? "UTC"} onChange={(event) => updatePreference("time_zone", event.target.value)}><option>UTC</option><option>New York</option><option>London</option><option>Tokyo</option>          </select></div>
-                  </div>
-                </>
-              ),
-              Security: (
+      <div className="settings-section">
+        <span className="small-label">DISPLAY</span>
+        <h3>Time</h3>
+        <div className="setting-row"><div><b>Time zone</b><small>The desk clock and every timestamp in Zuri</small></div><select value={preferencesDraft?.time_zone ?? "UTC"} onChange={(event) => updatePreference("time_zone", event.target.value)}>{TIME_ZONE_NAMES.map((name) => <option key={name}>{name}</option>)}</select></div>
+      </div>
+    ),
+    Security: (
       <>
         <div className="settings-section">
           <span className="small-label">SECURITY</span>
