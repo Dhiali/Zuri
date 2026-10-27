@@ -45,7 +45,10 @@ async function call<T>(token: string, path: string, body: unknown, signal?: Abor
     body: JSON.stringify(body),
     signal,
   });
-  if (!response.ok) throw new Error("request failed");
+  if (!response.ok) {
+    const info = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+    throw new Error(response.status === 429 && typeof info?.detail === "string" ? info.detail : "request failed");
+  }
   return response.json() as Promise<T>;
 }
 
@@ -62,6 +65,8 @@ export function ZuriOnboarding({ accessToken, initialSee, initialAct, onFinish, 
   const [loading, setLoading] = useState(true);
   const [unsure, setUnsure] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [failNote, setFailNote] = useState("");
+  const noteFor = (error: unknown) => (error instanceof Error && error.message !== "request failed" ? error.message : "");
   const [roadmap, setRoadmap] = useState<{ message: string; steps: RoadmapStep[]; levels: Record<string, string> } | null>(null);
   const [tour, setTour] = useState<TourChoice | null>(null);
   const [involvement, setInvolvement] = useState<Involvement | null>(null);
@@ -76,7 +81,7 @@ export function ZuriOnboarding({ accessToken, initialSee, initialAct, onFinish, 
     setFailed(false);
     call<{ message: string }>(accessToken, "/api/zuri/onboarding", { stage: "open", messages: [] })
       .then((data) => setMessages([{ role: "assistant", content: data.message }]))
-      .catch(() => setFailed(true))
+      .catch((error: unknown) => { setFailNote(noteFor(error)); setFailed(true); })
       .finally(() => setLoading(false));
   };
 
@@ -99,7 +104,8 @@ export function ZuriOnboarding({ accessToken, initialSee, initialAct, onFinish, 
       const data = await call<{ message: string; roadmap: RoadmapStep[]; market_levels?: Record<string, string> }>(accessToken, "/api/zuri/onboarding", { stage: "roadmap", messages: conversation });
       setRoadmap({ message: data.message, steps: data.roadmap, levels: data.market_levels ?? {} });
       setStage("roadmap");
-    } catch {
+    } catch (error) {
+      setFailNote(noteFor(error));
       setFailed(true);
       setUnsure(true);
     } finally {
@@ -125,7 +131,8 @@ export function ZuriOnboarding({ accessToken, initialSee, initialAct, onFinish, 
         setUnsure(data.status === "unsure");
         setLoading(false);
       }
-    } catch {
+    } catch (error) {
+      setFailNote(noteFor(error));
       setMessages(messages);
       setDraft(content);
       setFailed(true);
@@ -153,7 +160,7 @@ export function ZuriOnboarding({ accessToken, initialSee, initialAct, onFinish, 
             <div className="zuri-onb-thread" ref={listRef} aria-live="polite">
               {messages.map((message, index) => <p key={index} className={`zuri-onb-msg ${message.role}`}>{message.content}</p>)}
               {loading && <p className="zuri-onb-msg assistant"><span className="iv-caret" aria-hidden="true" /></p>}
-              {failed && <p className="zuri-onb-msg error" role="alert">I couldn&apos;t reach my brain just now. {messages.length === 0 ? <button type="button" className="zuri-skip" onClick={open}>Try again</button> : "Your message is still in the box, try sending it again."}</p>}
+              {failed && <p className="zuri-onb-msg error" role="alert">{failNote || "I couldn't reach my brain just now."} {messages.length === 0 ? <button type="button" className="zuri-skip" onClick={open}>Try again</button> : "Your message is still in the box, try sending it again."}</p>}
             </div>
             {unsure && !loading && (
               <div className="zuri-onb-choices" role="group" aria-label="Do you want to say more?">

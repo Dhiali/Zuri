@@ -37,7 +37,7 @@ import { grabScreenFrame, startScreenShare, useScreenShareActive } from "./scree
 import { draftJournalNote, JournalInsights, trackJourneyEvent } from "./journal-insights";
 
 type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
-type SettingsTab = "Account" | "Broker" | "Trading" | "Risk" | "Platform" | "Display" | "Notifications" | "Security";
+type SettingsTab = "Account" | "Broker" | "Trading" | "Risk" | "Platform" | "Display" | "Security";
 type Instrument = { symbol: string; name: string; price: string; change: string; up: boolean; icon: string; group: string; high?: string; low?: string; volume?: string; hasQuote?: boolean };
 type MarketNewsArticle = { id: string; title: string; summary: string; source: string; published_at: string | null; url: string; related_symbols: string[]; market_wide: boolean; category: "trading" | "world" };
 type MarketNewsResponse = { articles: MarketNewsArticle[]; fetched_at: string; refresh_after_seconds: number; sources: string[]; warnings: string[] };
@@ -634,7 +634,7 @@ function TradingWorkspace() {
       <div className={section === "Settings" ? "workspace settings-workspace" : "workspace"}>
         <nav className="primary-nav" aria-label="Primary navigation">
           <div className="nav-main">{(["Charts", "Dashboard", "Trade", "History", "Journal"] as Section[]).map((item) => <button key={item} data-zuri-target={`nav-${item}`} onClick={() => setSection(item)} className={section === item ? "nav-item selected" : "nav-item"} title={item}><Icon name={item}/><span>{item}</span></button>)}</div>
-          <div className="nav-bottom"><button data-zuri-target="nav-Settings" onClick={() => setSection("Settings")} className={section === "Settings" ? "nav-item selected" : "nav-item"} title="Settings"><Icon name="Settings"/><span>Settings</span></button><div className="nav-help">?</div></div>
+          <div className="nav-bottom"><button data-zuri-target="nav-Settings" onClick={() => setSection("Settings")} className={section === "Settings" ? "nav-item selected" : "nav-item"} title="Settings"><Icon name="Settings"/><span>Settings</span></button></div>
         </nav>
         <div className="content-column">
           <div className="page-heading"><div><div className="eyebrow">PERSONAL TRADING DESK <span>•</span> {deskDate} <span>•</span> <time>{deskTime}</time></div><h1>{section === "Charts" ? "Charts" : section}</h1></div></div>
@@ -790,7 +790,7 @@ function TradingWorkspace() {
           </>}
         </aside>}
       </div>
-      <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>{linkedAccount.data ? (linkedAccount.data.environment === "live" ? "Live trading" : "Paper trading") : "Trading"} <b>{linkedAccount.data ? "ON" : "OFF"}</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
+      <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>{linkedAccount.data ? (linkedAccount.data.environment === "live" ? "Live trading" : "Paper trading") : "Trading"} <b>{linkedAccount.data ? "ON" : "OFF"}</b></span><span>Prices in USD</span><span className="status-spacer"/></footer>
       {showOnboarding && journey && (
         <ZuriOnboarding
           accessToken={accessToken}
@@ -1479,7 +1479,7 @@ function SettingsView({
   const [accountDeleteConfirmation, setAccountDeleteConfirmation] = useState("");
   const [accountDeleteBusy, setAccountDeleteBusy] = useState(false);
   const [accountDeleteError, setAccountDeleteError] = useState("");
-  const tabs: SettingsTab[] = ["Account", "Broker", "Trading", "Risk", "Platform", "Display", "Notifications", "Security"];
+  const tabs: SettingsTab[] = ["Account", "Broker", "Trading", "Risk", "Platform", "Display", "Security"];
 
   useEffect(() => {
     let cancelled = false;
@@ -1695,26 +1695,12 @@ function SettingsView({
         <div className="settings-section">
           <span className="small-label">DISPLAY</span>
           <h3>Theme and layout</h3>
-          <div className="setting-row"><div><b>Color theme</b><small>Workspace palette</small></div><select value={preferencesDraft?.color_theme ?? "Midnight"} onChange={(event) => updatePreference("color_theme", event.target.value)}><option>Midnight</option><option>Graphite</option><option>Classic</option><option>High contrast</option></select></div>
           <div className="setting-row"><div><b>Language</b><small>Interface language</small></div><select value={preferencesDraft?.language ?? "English"} onChange={(event) => updatePreference("language", event.target.value)}><option>English</option><option>Deutsch</option><option>Français</option><option>Español</option></select></div>
-          <div className="setting-row"><div><b>Time zone</b><small>Display timestamps</small></div><select value={preferencesDraft?.time_zone ?? "UTC"} onChange={(event) => updatePreference("time_zone", event.target.value)}><option>UTC</option><option>New York</option><option>London</option><option>Tokyo</option></select></div>
-          <div className="setting-row"><div><b>Compact mode</b><small>Dense UI layout</small></div><input type="checkbox" checked={preferencesDraft?.compact_mode ?? false} onChange={(event) => updatePreference("compact_mode", event.target.checked)} /></div>
-        </div>
-      </>
-    ),
-    Notifications: (
-      <>
-        <div className="settings-section">
-          <span className="small-label">ALERTS</span>
-          <h3>Signal and trade notifications</h3>
-          <div className="setting-row"><div><b>Price alerts</b><small>Triggered by symbol thresholds</small></div><input type="checkbox" checked={preferencesDraft?.price_alerts_enabled ?? true} onChange={(event) => updatePreference("price_alerts_enabled", event.target.checked)} /></div>
-          <div className="setting-row"><div><b>Execution notifications</b><small>Order and fill alerts</small></div><input type="checkbox" checked={preferencesDraft?.execution_notifications_enabled ?? true} onChange={(event) => updatePreference("execution_notifications_enabled", event.target.checked)} /></div>
-          <div className="setting-row"><div><b>Journal reminders</b><small>Post-trade review prompts</small></div><input type="checkbox" checked={preferencesDraft?.journal_reminders_enabled ?? true} onChange={(event) => updatePreference("journal_reminders_enabled", event.target.checked)} /></div>
-          <div className="setting-row"><div><b>Desktop push</b><small>Browser and OS popups</small></div><input type="checkbox" checked={preferencesDraft?.desktop_notifications_enabled ?? false} onChange={(event) => updatePreference("desktop_notifications_enabled", event.target.checked)} /></div>
-        </div>
-      </>
-    ),
-    Security: (
+          <div className="setting-row"><div><b>Time zone</b><small>Display timestamps</small></div><select value={preferencesDraft?.time_zone ?? "UTC"} onChange={(event) => updatePreference("time_zone", event.target.value)}><option>UTC</option><option>New York</option><option>London</option><option>Tokyo</option>          </select></div>
+                  </div>
+                </>
+              ),
+              Security: (
       <>
         <div className="settings-section">
           <span className="small-label">SECURITY</span>
