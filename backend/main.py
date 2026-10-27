@@ -21,7 +21,8 @@ import uuid
 
 import requests
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from groq import Groq
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,6 +44,19 @@ app = FastAPI(
 )
 
 logger = logging.getLogger(__name__)
+
+_RATE_LIMIT_HINT = re.compile(r"rate_limit_exceeded|Error code: 429|Rate limit reached", re.IGNORECASE)
+
+
+@app.exception_handler(HTTPException)
+async def friendly_ai_limit_errors(request: Request, exc: HTTPException):
+    """Shows a calm message instead of the raw provider error when the AI quota is used up."""
+    detail = exc.detail
+    if isinstance(detail, str) and _RATE_LIMIT_HINT.search(detail):
+        wait = re.search(r"try again in ([0-9hms. ]+?)[.\s]*(?:Need|'|$)", detail)
+        when = f" Please try again in about {wait.group(1).strip()}." if wait else " Please try again in a little while."
+        return JSONResponse(status_code=429, content={"detail": "Zuri has used up her thinking allowance for now." + when})
+    return JSONResponse(status_code=exc.status_code, content={"detail": detail}, headers=exc.headers)
 
 allowed_frontend_origins = os.getenv(
     "FRONTEND_ORIGINS",
@@ -2772,6 +2786,21 @@ def zuri_onboarding(request: OnboardingRequest, background_tasks: BackgroundTask
         reply = str(data.get("reply") or "").strip()
         move = zuri_agent.decide_onboarding_move(str(data.get("next") or ""), signal, user_turns, data.get("known") if isinstance(data.get("known"), dict) else {})
         status = {"advance": "done", "ask": "continue", "reply": "continue", "choices": "unsure"}[move]
+        if move == "choices" and (not reply or "?" in reply or str(data.get("next") or "") != "choices"):
+            # The buttons are about to be shown, so a fresh probing question would clash with them.
+            try:
+                wrap = _ask_json(
+                    ZURI_PERSONA
+                    + "The user just shared something and the app now shows them 'I want to say more' / 'We can move on' buttons. Write Zuri's reply: thank them sincerely for what they shared, in your own words and specific to what they said (one short sentence, optionally one small useful insight, never repeating their words back), "
+                    "then invite them warmly to add anything else if they want, or say you are happy to carry on. It must NOT contain a new question about their trading, goals, markets, time or risk; the only question mark allowed is a soft 'Is there anything else you would like me to know?'. Max 3 short sentences.\n"
+                    'Reply with ONLY JSON: {"reply": string}.\n\n' + facts,
+                    conversation, 800,
+                )
+                reply = str(wrap.get("reply") or "").strip()
+            except HTTPException:
+                reply = ""
+            if not reply or reply.count("?") > 1:
+                reply = "Thank you, that was really helpful. Is there anything else you would like me to know, or shall we carry on?"
         if not reply:
             reply = {"done": "That's completely fine. Let's start setting things up and we'll build from there.", "unsure": "Thank you, that helps me a lot. I can carry on whenever you're ready.", "continue": "Thank you, that helps me a lot."}[status]
         background_tasks.add_task(remember_exchange, user["id"], "onboarding", "chat", "Dashboard", [("user", latest_user), ("assistant", reply)], snapshot)

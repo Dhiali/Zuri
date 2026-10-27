@@ -55,6 +55,7 @@ def build_market_layout(levels: dict, markets: list[str] | None = None) -> dict:
 _DONE_PHRASES = re.compile(
     r"^\s*(no|nope|nah|nothing|nothing else|nothing more|that'?s (all|it|everything)|i'?m (good|done|set|ready)|all good|all done|that is all|"
     r"let'?s (go|start|move on|continue)|move on|continue|ready|lets go|no thanks|no thank you)\W*\s*$", re.IGNORECASE)
+_DONT_KNOW = re.compile(r"\b(i\s*don'?t\s*know|dont\s*know|idk|no\s*idea|not\s*sure|i\s*know\s*(nothing|very little))\b", re.IGNORECASE)
 _MORE_CUES = re.compile(r"\b(also|and|but|oh|wait|one more|another thing|actually|i want to|i also|let me)\b", re.IGNORECASE)
 
 
@@ -80,6 +81,9 @@ def decide_onboarding_move(model_next: str, signal: str | None, user_turns: list
     if signal == "more" and move == "advance":
         return "ask"
     if move in ("ask", "reply") and len(user_turns) >= 4:
+        return "choices"
+    if move == "ask" and user_turns and _DONT_KNOW.search(user_turns[-1]):
+        # "I don't know" is an answer; asking another question just feels like an interrogation.
         return "choices"
     if move == "ask" and knows_enough and len(user_turns) >= 3:
         return "choices"

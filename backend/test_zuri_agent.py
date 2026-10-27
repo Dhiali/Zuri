@@ -361,6 +361,9 @@ class OnboardingChatTests(unittest.TestCase):
         self.assertEqual(move("ask", None, ["a", "b", "c", "d"], {}), "choices")
         self.assertEqual(move("ask", None, ["a", "b", "c"], rich), "choices")
         self.assertEqual(move("nonsense", None, ["a"], {}), "choices")
+        # "I don't know" is an answer: never follow it with another question.
+        self.assertEqual(move("ask", None, ["a", "i dont know"], {}), "choices")
+        self.assertEqual(move("ask", None, ["a", "idk"], {}), "choices")
 
     def _chat(self, user_turns, model_next):
         from unittest import mock
