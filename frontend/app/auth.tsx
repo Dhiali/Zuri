@@ -7,6 +7,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -17,13 +18,14 @@ import { getSupabaseBrowserClient, isSupabaseConfigured } from "./supabase";
 import { saveUserProfile } from "./user-data";
 import { IntroVisual } from "./intro-visuals";
 
-type AuthStatus = "loading" | "intro" | "welcome" | "sign-in" | "sign-up" | "set-password" | "onboarding" | "workspace" | "reset-password";
+type AuthStatus = "loading" | "intro" | "welcome" | "sign-in" | "sign-up" | "set-password" | "verify-email" | "onboarding" | "workspace" | "reset-password";
 type Experience = "New to trading" | "Learning the basics" | "Experienced";
 type Market = "Stocks" | "Crypto" | "Forex" | "Commodities";
 type SocialProvider = "google";
 
 const MIN_SPLASH_DURATION_MS = 3200;
 const INTRO_COMPLETED_STORAGE_KEY = "zuri-product-intro-completed";
+const EMAIL_LINK_REQUIRED_FROM = Date.UTC(2026, 9, 27);
 const introSteps = [
   {
     eyebrow: "YOUR TRADING EXPERT",
@@ -49,6 +51,7 @@ type AuthContextValue = {
   session: Session | null;
   signOut: () => Promise<void>;
   updateEmail: (email: string) => Promise<void>;
+  sendPasswordChangeEmail: () => Promise<string>;
   updateDisplayName: (displayName: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
 };
@@ -80,6 +83,19 @@ function getServerIntroSnapshot() {
   return false;
 }
 
+// Anyone who has ever held a session already has an account, so the pre-sign-up intro is never shown to them again on this browser.
+function markKnownUser(session: Session | null) {
+  if (!session) return;
+  try {
+    if (window.localStorage.getItem(INTRO_COMPLETED_STORAGE_KEY) !== "true") {
+      window.localStorage.setItem(INTRO_COMPLETED_STORAGE_KEY, "true");
+      window.dispatchEvent(new Event("zuri-product-intro-change"));
+    }
+  } catch {
+    // Storage unavailable: the intro may show again, which is harmless.
+  }
+}
+
 export function useZuriAuth() {
   const context = useContext(AuthContext);
   if (!context) throw new Error("useZuriAuth must be used inside ZuriAuthGate.");
@@ -93,6 +109,8 @@ function statusForSession(session: Session | null): AuthStatus {
     ? providers.includes("google")
     : session.user.app_metadata.provider === "google";
   if (usedGoogle && session.user.user_metadata.password_created !== true) return "set-password";
+  // New Google accounts must confirm their email by link. The flag lives in app_metadata, which only the backend can write.
+  if (usedGoogle && session.user.app_metadata.email_link_verified !== true && Date.parse(session.user.created_at) >= EMAIL_LINK_REQUIRED_FROM) return "verify-email";
   return session.user.user_metadata.onboarding_completed === true ? "workspace" : "onboarding";
 }
 
@@ -147,6 +165,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!active) return;
       authEventReceived = true;
+      markKnownUser(nextSession);
       setSession(nextSession);
       setStatus(event === "PASSWORD_RECOVERY" ? "reset-password" : statusForSession(nextSession));
       setError("");
@@ -161,9 +180,10 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
         } else {
           setError(sessionError.message);
         }
-        setStatus("welcome");
+        setStatus(signedOutStatus());
         return;
       }
+      markKnownUser(data.session);
       setSession(data.session);
       setStatus(statusForSession(data.session));
     });
@@ -174,6 +194,52 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const sendVerificationEmail = async () => {
+    const supabase = getSupabaseBrowserClient();
+    const address = session?.user.email;
+    if (!supabase || !address) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { error: otpError } = await supabase.auth.signInWithOtp({
+        email: address,
+        options: { shouldCreateUser: false, emailRedirectTo: `${window.location.origin}/email-verified` },
+      });
+      if (otpError) throw otpError;
+      setMessage(`We sent a confirmation link to ${address}. Open it to continue.`);
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : "We could not send the confirmation email. Please try again in a minute.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const verifyEmailUserId = status === "verify-email" ? session?.user.id : undefined;
+  const sentVerificationFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!verifyEmailUserId) return;
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+
+    if (sentVerificationFor.current !== verifyEmailUserId) {
+      sentVerificationFor.current = verifyEmailUserId;
+      void sendVerificationEmail();
+    }
+
+    // The link opens in another tab; pick up the confirmation here without a manual refresh.
+    const timer = window.setInterval(() => {
+      void supabase.auth.refreshSession().then(({ data }) => {
+        if (data.session?.user.app_metadata.email_link_verified === true) {
+          setSession(data.session);
+          setStatus(statusForSession(data.session));
+          setMessage("");
+        }
+      });
+    }, 4000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verifyEmailUserId]);
+
   const contextValue = useMemo<AuthContextValue>(() => ({
     session,
     signOut: async () => {
@@ -183,6 +249,14 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
       if (signOutError) throw signOutError;
       setSession(null);
       setStatus(signedOutStatus());
+    },
+    sendPasswordChangeEmail: async () => {
+      const supabase = getSupabaseBrowserClient();
+      const address = session?.user.email;
+      if (!supabase || !session || !address) throw new Error("Sign in before changing your password.");
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(address, { redirectTo: window.location.origin });
+      if (resetError) throw resetError;
+      return address;
     },
     updateEmail: async (email: string) => {
       const supabase = getSupabaseBrowserClient();
@@ -410,6 +484,17 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
         headers: { Authorization: "Bearer " + session.access_token, "Content-Type": "application/json" },
         body: JSON.stringify({ password: accountPassword }),
       });
+      if (response.status === 503) {
+        // The backend has no admin key configured; a signed-in user can set their own password directly.
+        const { error: selfError } = await supabase.auth.updateUser({ password: accountPassword, data: { password_created: true } });
+        if (selfError) throw selfError;
+        const { data: refreshed } = await supabase.auth.getSession();
+        setSession(refreshed.session);
+        setStatus(statusForSession(refreshed.session));
+        setAccountPassword("");
+        setConfirmAccountPassword("");
+        return;
+      }
       if (response.status === 401) {
         await supabase.auth.signOut({ scope: "local" });
         setSession(null);
@@ -543,7 +628,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
               <div className="auth-top-actions"><span>Already have an account?</span><button type="button" className="auth-text-button" onClick={() => continueFromIntro("sign-in")}>Sign in</button></div>
             ) : visibleStatus === "welcome" ? (
               <div className="auth-top-actions"><span>Already have an account?</span><button type="button" className="auth-text-button" onClick={() => switchStatus("sign-in")}>Sign in</button></div>
-            ) : visibleStatus === "onboarding" ? null : visibleStatus === "set-password" ? (
+            ) : visibleStatus === "onboarding" ? null : visibleStatus === "set-password" || visibleStatus === "verify-email" ? (
               <button type="button" className="auth-text-button" onClick={() => void startOver()}>Start over</button>
             ) : (
               <button type="button" className="auth-text-button" onClick={() => switchStatus("welcome")}>Back to home</button>
@@ -586,18 +671,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
             <section className="auth-story">
               <span className="auth-eyebrow auth-market-glow">YOUR MARKET, IN FOCUS</span>
               <h1>{visibleStatus === "welcome" ? <>Trade with a little more <em>clarity.</em></> : visibleStatus === "onboarding" ? <>A desk that starts with <em>you.</em></> : visibleStatus === "set-password" ? <>One more step for your <em>account.</em></> : <>A calmer way to meet the <em>markets.</em></>}</h1>
-              <p className="auth-story-copy">A thoughtful trading workspace for charts, plans, and perspective. Start with a demo desk, build better habits, and keep risk in view.</p>
-              <div className="auth-preview" aria-label="Example Zuri market chart">
-                <div className="auth-preview-top"><div><span className="auth-preview-symbol">BTC</span><span>Bitcoin / U.S. Dollar</span></div><span className="auth-demo-badge"><i /> DEMO MARKET</span></div>
-                <div className="auth-preview-price">$85,890 <span>+1.22%</span></div>
-                <svg className="auth-preview-chart" viewBox="0 0 520 126" role="img" aria-label="Illustrative market chart">
-                  <defs><linearGradient id="auth-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#b99aff" stopOpacity=".24" /><stop offset="100%" stopColor="#b99aff" stopOpacity="0" /></linearGradient></defs>
-                  <path d="M0 101 C35 89 46 93 75 79 S119 85 148 67 S187 76 217 60 S255 72 282 48 S328 56 355 40 S397 50 425 26 S478 36 520 12 V126 H0Z" fill="url(#auth-chart-fill)" />
-                  <path d="M0 101 C35 89 46 93 75 79 S119 85 148 67 S187 76 217 60 S255 72 282 48 S328 56 355 40 S397 50 425 26 S478 36 520 12" fill="none" stroke="#c3a8ff" strokeWidth="2.5" />
-                  <path d="M0 122 H520 M0 82 H520 M0 42 H520" stroke="#ffffff" strokeOpacity=".07" strokeDasharray="3 6" />
-                </svg>
-                <div className="auth-preview-foot"><span>Plan first. Decide with care.</span><span>SIMULATED DATA</span></div>
-              </div>
+              <p className="auth-story-copy">A thoughtful trading workspace for charts, plans, and perspective. Build better habits and keep risk in view.</p>
               <div className="auth-promise"><span>✳</span><p><b>Built for better decisions.</b><br />Not louder signals. Not promises. Just a clear place to think.</p></div>
             </section>
 
@@ -612,7 +686,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                   {error && <div className="auth-error" role="alert">{error}</div>}
                   <SocialSignInButtons disabled={busy} activeProvider={activeProvider} onProvider={startSocialSignIn} />
                   {!isSupabaseConfigured && <div className="auth-setup-note"><b>One quick setup step remains</b><span>Connect Zuri to Supabase to enable secure accounts. See the setup steps in the frontend README.</span></div>}
-                  <div className="auth-fineprint">By continuing, you agree to use Zuri as an educational demo workspace. Market data shown here may be simulated.</div>
+                  <div className="auth-fineprint">Zuri is an educational trading workspace and does not provide investment advice. Market quotes come from a public feed and may be delayed.</div>
                 </>
               )}
 
@@ -627,6 +701,18 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                     <label>Confirm password<PasswordInput autoComplete="new-password" value={confirmAccountPassword} onChange={setConfirmAccountPassword} minLength={8} /></label>
                     <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Creating password…" : "Create password"} <span>→</span></button>
                   </form>
+                  <div className="auth-switch">Wrong account? <button type="button" onClick={() => void startOver()}>Start over</button></div>
+                </>
+              )}
+
+              {visibleStatus === "verify-email" && (
+                <>
+                  <span className="auth-card-kicker">CONFIRM IT&apos;S YOU</span>
+                  <h2>Check your email</h2>
+                  <p>We sent a confirmation link to <strong>{session?.user.email}</strong>. Open it to verify your email address, then come back to this tab. It will continue on its own.</p>
+                  {message && <div className="auth-message" role="status">{message}</div>}
+                  {error && <div className="auth-error" role="alert">{error}</div>}
+                  <button type="button" className="auth-submit" disabled={busy} onClick={() => void sendVerificationEmail()}>{busy ? "Sending…" : "Resend the email"} <span>→</span></button>
                   <div className="auth-switch">Wrong account? <button type="button" onClick={() => void startOver()}>Start over</button></div>
                 </>
               )}
@@ -671,7 +757,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                   {error && <div className="auth-error" role="alert">{error}</div>}
                   <form className="auth-form onboarding-form" onSubmit={finishOnboarding}>
                     <label>What should we call you?<input type="text" autoComplete="given-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name (optional)" maxLength={60} /></label>
-                    <fieldset><legend>Where are you in your trading journey? <small>Required</small></legend><div className="auth-choice-grid">{(["New to trading", "Learning the basics", "Experienced"] as Experience[]).map((option) => <button key={option} type="button" aria-pressed={experience === option} className={experience === option ? "auth-choice selected" : "auth-choice"} onClick={() => setExperience(option)}>{option}</button>)}</div></fieldset>
+                    <fieldset><legend>Where are you in your trading journey? <small>Required</small></legend><div className="auth-choice-grid">{(["New to trading", "Learning the basics", "Experienced"] as Experience[]).map((option) => option === "Experienced" ? <button key={option} type="button" disabled aria-disabled="true" className="auth-choice coming-soon" title="Intermediate and expert journeys are coming soon">Experienced<small>Coming soon</small></button> : <button key={option} type="button" aria-pressed={experience === option} className={experience === option ? "auth-choice selected" : "auth-choice"} onClick={() => setExperience(option)}>{option}</button>)}</div><p className="auth-hint">Zuri is built for new traders first. Intermediate and expert journeys are coming soon.</p></fieldset>
                     <fieldset><legend>Which markets interest you? <small>Choose at least one, or tell us you&apos;re not sure</small></legend><div className="auth-choice-grid markets">{(["Stocks", "Crypto", "Forex", "Commodities"] as Market[]).map((market) => <button key={market} type="button" aria-pressed={markets.includes(market)} className={markets.includes(market) ? "auth-choice selected" : "auth-choice"} onClick={() => { setMarketsUnsure(false); setMarkets((current) => current.includes(market) ? current.filter((item) => item !== market) : [...current, market]); }}>{market}</button>)}<button type="button" aria-pressed={marketsUnsure} className={marketsUnsure ? "auth-choice selected" : "auth-choice"} onClick={() => { setMarkets([]); setMarketsUnsure((current) => !current); }}>I&apos;m not sure yet</button></div></fieldset>
                     <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Saving your desk…" : "Open my trading desk"} <span>→</span></button>
                   </form>
@@ -681,7 +767,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
             </section>
           </div>
           )}
-          <footer className="auth-footer"><span>© 2026 Zuri Markets</span><span>Educational demo · Not financial advice</span><span>Simulated market data</span></footer>
+          <footer className="auth-footer"><span>© 2026 Zuri Markets</span><span>Educational workspace · Not financial advice</span><span>Quotes may be delayed</span></footer>
         </main>
       )}
     </AuthContext.Provider>

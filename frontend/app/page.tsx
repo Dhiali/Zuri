@@ -29,43 +29,51 @@ import {
   type UserPreferences,
   type ZuriJourney,
 } from "./user-data";
-import { JourneyChecklist, ZuriMascot, ZuriWelcome } from "./zuri-journey";
+import { JourneyChecklist, ZuriMascot } from "./zuri-journey";
+import { loadInvolvement, saveInvolvement, loadLayout, saveLayout, ZuriOnboarding, type Involvement, type MarketLayout, type OnboardingResult } from "./zuri-onboarding";
 import { ZuriGuide } from "./zuri-guide";
+import { logZuriEvent, useZuriAccess, useZuriNudges, ZuriTakeover, ZuriTradeCard, type Walkthrough, type WalkthroughStep, type ZuriAction, type ZuriNudge } from "./zuri-agent";
+import { grabScreenFrame, startScreenShare, useScreenShareActive } from "./screen-capture";
 import { draftJournalNote, JournalInsights, trackJourneyEvent } from "./journal-insights";
 
 type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
 type SettingsTab = "Account" | "Broker" | "Trading" | "Risk" | "Platform" | "Display" | "Notifications" | "Security";
-type Instrument = { symbol: string; name: string; price: string; change: string; up: boolean; icon: string; group: string; tickDirection?: "up" | "down"; tickSequence?: number };
+type Instrument = { symbol: string; name: string; price: string; change: string; up: boolean; icon: string; group: string; high?: string; low?: string; volume?: string; hasQuote?: boolean };
 type MarketNewsArticle = { id: string; title: string; summary: string; source: string; published_at: string | null; url: string; related_symbols: string[]; market_wide: boolean; category: "trading" | "world" };
 type MarketNewsResponse = { articles: MarketNewsArticle[]; fetched_at: string; refresh_after_seconds: number; sources: string[]; warnings: string[] };
 type BacktestNewsContext = { title: string; published_at: string | null };
+type RealQuote = { price: number; change_percent: number; high: number | null; low: number | null; volume: number | null };
 
+// Only the markets Zuri can supply a real quote for. Prices stay empty ("—") until the real feed answers.
 const initialInstruments: Instrument[] = [
-  { symbol: "BTCUSD", name: "Bitcoin / U.S. Dollar", price: "85,890", change: "+1.22%", up: true, icon: "₿", group: "Crypto" },
-  { symbol: "ETHUSD", name: "Ethereum / U.S. Dollar", price: "2,284.60", change: "+0.84%", up: true, icon: "◆", group: "Crypto" },
-  { symbol: "SOLUSD", name: "Solana / U.S. Dollar", price: "142.82", change: "−0.36%", up: false, icon: "◎", group: "Crypto" },
-  { symbol: "EURUSD", name: "Euro / U.S. Dollar", price: "1.12643", change: "+0.20%", up: true, icon: "€", group: "Forex" },
-  { symbol: "GOLD", name: "Gold Spot / U.S. Dollar", price: "4,184.70", change: "+0.24%", up: true, icon: "Au", group: "Commodities" },
-  { symbol: "AAPL", name: "Apple Inc.", price: "257.13", change: "−0.18%", up: false, icon: "A", group: "Stocks" },
+  { symbol: "BTCUSD", name: "Bitcoin / U.S. Dollar", price: "—", change: "—", up: true, icon: "₿", group: "Crypto" },
+  { symbol: "ETHUSD", name: "Ethereum / U.S. Dollar", price: "—", change: "—", up: true, icon: "◆", group: "Crypto" },
+  { symbol: "SOLUSD", name: "Solana / U.S. Dollar", price: "—", change: "—", up: true, icon: "◎", group: "Crypto" },
+  { symbol: "EURUSD", name: "Euro / U.S. Dollar", price: "—", change: "—", up: true, icon: "€", group: "Forex" },
+  { symbol: "GOLD", name: "Gold Spot / U.S. Dollar", price: "—", change: "—", up: true, icon: "Au", group: "Commodities" },
+  { symbol: "AAPL", name: "Apple Inc.", price: "—", change: "—", up: true, icon: "A", group: "Stocks" },
 ];
 
-const simulatedTickSizes: Record<string, number> = { BTCUSD: 18, ETHUSD: 1.4, SOLUSD: 0.18, EURUSD: 0.00015, GOLD: 0.45, AAPL: 0.16 };
+const priceDigits = (instrument: Pick<Instrument, "symbol" | "group">) => (instrument.group === "Forex" ? 5 : instrument.symbol === "BTCUSD" ? 0 : 2);
+const formatPriceValue = (instrument: Pick<Instrument, "symbol" | "group">, value: number) => value.toLocaleString("en-US", { minimumFractionDigits: priceDigits(instrument), maximumFractionDigits: priceDigits(instrument) });
+const formatVolume = (value: number) => Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 2 }).format(value);
+const plainPrice = (price: string) => (/\d/.test(price) ? price.replace(/,/g, "") : "");
 
-function advanceInstrument(instrument: Instrument): Instrument {
-  const price = Number(instrument.price.replace(/,/g, ""));
-  const delta = (Math.random() * 2 - 1) * simulatedTickSizes[instrument.symbol];
-  const nextPrice = Math.max(0.00001, price + delta);
-  const previousChange = Number(instrument.change.replace("−", "-").replace("%", ""));
-  const nextChange = previousChange + (delta / price) * 100;
-  const precision = instrument.symbol === "BTCUSD" ? 0 : instrument.group === "Forex" ? 5 : 2;
-  return {
-    ...instrument,
-    price: nextPrice.toLocaleString("en-US", { minimumFractionDigits: precision, maximumFractionDigits: precision }),
-    change: `${nextChange >= 0 ? "+" : "−"}${Math.abs(nextChange).toFixed(2)}%`,
-    up: nextChange >= 0,
-    tickDirection: delta >= 0 ? "up" : "down",
-    tickSequence: (instrument.tickSequence ?? 0) + 1,
-  };
+function applyQuotes(current: Instrument[], quotes: Record<string, RealQuote>): Instrument[] {
+  return current.map((instrument) => {
+    const quote = quotes[instrument.symbol];
+    if (!quote) return instrument;
+    return {
+      ...instrument,
+      price: formatPriceValue(instrument, quote.price),
+      change: `${quote.change_percent >= 0 ? "+" : "−"}${Math.abs(quote.change_percent).toFixed(2)}%`,
+      up: quote.change_percent >= 0,
+      high: quote.high === null ? undefined : formatPriceValue(instrument, quote.high),
+      low: quote.low === null ? undefined : formatPriceValue(instrument, quote.low),
+      volume: quote.volume ? formatVolume(quote.volume) : undefined,
+      hasQuote: true,
+    };
+  });
 }
 
 const chartTools = ["＋", "╱", "⌁", "⌖", "⌕", "T", "◉", "⌁", "⊞", "⌂", "◌", "♧"];
@@ -141,7 +149,7 @@ function TradingWorkspace() {
   const [dataError, setDataError] = useState("");
   const [section, setSection] = useState<Section>("Charts");
   const [instruments, setInstruments] = useState(initialInstruments);
-  const [watchlistSymbols, setWatchlistSymbols] = useState(initialWatchlistSymbols);
+  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([]);
   const watchlistSnapshot = JSON.stringify(watchlistSymbols);
   const [userPreferences, setUserPreferences] = useState<UserPreferences | null>(null);
   const [workspaceDataUserId, setWorkspaceDataUserId] = useState<string | null>(null);
@@ -198,15 +206,38 @@ function TradingWorkspace() {
   };
   const marketNewsLoaded = useRef(false);
   const activeSymbol = watchlistSymbols.includes(selectedSymbol) ? selectedSymbol : watchlistInstruments[0]?.symbol ?? initialInstruments[0].symbol;
-  const symbol = instruments.find((instrument) => instrument.symbol === activeSymbol) ?? initialInstruments.find((instrument) => instrument.symbol === activeSymbol) ?? initialInstruments[0];
-  const aiBias = symbol.up ? "UPWARD BIAS" : "DOWNWARD BIAS";
+  const symbol = instruments.find((instrument) => instrument.symbol === activeSymbol) ?? initialInstruments[0];
 
   useEffect(() => {
-    if (section === "Charts" && workspaceDataUserId === userId) trackJourneyEvent(accessToken, "symbol_viewed", activeSymbol);
+    if (section === "Charts" && workspaceDataUserId === userId && watchlistSymbols.includes(activeSymbol)) trackJourneyEvent(accessToken, "symbol_viewed", activeSymbol);
   }, [section, activeSymbol, accessToken, userId, workspaceDataUserId]);
-  const aiBrief = `The simulated ${symbol.symbol} quote is ${symbol.change} today. Treat this as a watch cue, then verify price action and risk before placing a paper order.`;
+  const aiBrief = symbol.hasQuote
+    ? `${symbol.symbol} is ${symbol.change} on the day${symbol.low && symbol.high ? `, trading between ${symbol.low} and ${symbol.high}` : ""}. This is a snapshot of price action, not a forecast. Ask Zuri for a full chart analysis, then check price action and risk before you act.`
+    : "Waiting for the real market quote. Ask Zuri for a chart analysis once it loads.";
   const searchUniverse = query.trim() ? instruments : watchlistInstruments;
   const filteredInstruments = searchUniverse.filter((item) => `${item.symbol} ${item.name}`.toLowerCase().includes(query.toLowerCase()));
+  const [layout, setLayout] = useState<MarketLayout | null>(null);
+  const [marketTab, setMarketTab] = useState("");
+  const [openMarkets, setOpenMarkets] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLayout(loadLayout());
+  }, []);
+  // Zuri's layout plan only applies to the plain watchlist (not a search) and only when more than one market is on it.
+  const presentMarkets = [...new Set(filteredInstruments.map((item) => item.group))];
+  const marketOrder = [...(layout?.markets.map((entry) => entry.market) ?? []), ...presentMarkets].filter((market, index, all) => all.indexOf(market) === index && presentMarkets.includes(market));
+  const layoutActive = Boolean(layout) && layout!.mode !== "list" && !query.trim() && presentMarkets.length > 1;
+  const activeMarket = [marketTab, layout?.focus ?? "", marketOrder[0] ?? ""].find((market) => market && presentMarkets.includes(market)) ?? "";
+  const symbolDetail = layout?.markets.find((entry) => entry.market === symbol.group)?.detail ?? "full";
+  const renderQuoteRow = (item: Instrument) => {
+    const isInWatchlist = watchlistSymbols.includes(item.symbol);
+    return <div key={item.symbol} className={isInWatchlist && symbol.symbol === item.symbol ? "watch-row selected" : "watch-row"}>
+      <button className="watch-row-main" onClick={() => isInWatchlist ? (setSelectedSymbol(item.symbol), setSection("Charts")) : addInstrument(item.symbol)} aria-label={isInWatchlist ? `Select ${item.symbol}` : `Preview ${item.symbol} quote and add to watchlist`}>
+        <span className={`watch-icon ${item.group.toLowerCase()}`}>{item.icon}</span><span className="watch-symbol"><b>{item.symbol}</b><small>{item.group}</small></span><span className="quote-price">{item.price}</span><span className={`quote-price ${item.hasQuote ? (item.up ? "positive" : "negative") : "muted"}`}>{item.change}</span>
+      </button>
+      <button className="watch-remove" title={isInWatchlist ? `Remove ${item.symbol} from watchlist` : `Add ${item.symbol} to watchlist`} aria-label={isInWatchlist ? `Remove ${item.symbol} from watchlist` : `Add ${item.symbol} to watchlist`} onClick={() => isInWatchlist ? removeInstrument(item.symbol) : addInstrument(item.symbol)}>{isInWatchlist ? "×" : "+"}</button>
+    </div>;
+  };
 
   useEffect(() => {
     const updateDeskDate = () => {
@@ -260,11 +291,22 @@ function TradingWorkspace() {
   }, [session?.user.id]);
 
   useEffect(() => {
-    const ticker = window.setInterval(() => {
-      setInstruments((current) => current.map(advanceInstrument));
-    }, 1800);
-    return () => window.clearInterval(ticker);
-  }, []);
+    if (!accessToken) return;
+    let cancelled = false;
+    const load = () => {
+      if (document.hidden) return;
+      const all = initialInstruments.map((item) => item.symbol).join(",");
+      void fetch(`${backendUrl}/api/quotes?symbols=${all}`, { headers: { Authorization: `Bearer ${accessToken}` } })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((result: { quotes?: Record<string, RealQuote> } | null) => {
+          if (!cancelled && result?.quotes) setInstruments((current) => applyQuotes(current, result.quotes ?? {}));
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const timer = window.setInterval(load, 20_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [accessToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -368,6 +410,210 @@ function TradingWorkspace() {
     setQuery("");
   };
 
+  const [settingsRequest, setSettingsRequest] = useState<{ tab?: string; prefill?: WalkthroughStep["prefill"]; n: number } | null>(null);
+  const [walkthrough, setWalkthrough] = useState<Walkthrough | null>(null);
+  const { access: zuriAccess, update: updateZuriAccess } = useZuriAccess();
+  const { nudges, dismiss: dismissNudge } = useZuriNudges(accessToken);
+  const [involvement, setInvolvement] = useState<Involvement>("side_by_side");
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setInvolvement(loadInvolvement());
+  }, []);
+  const changeInvolvement = (value: Involvement) => { setInvolvement(value); saveInvolvement(value); };
+  // A need-to-know buddy only speaks up for alerts, an occasional one adds warnings, a side-by-side one shares everything.
+  const visibleNudges = nudges.filter((nudge) => involvement === "side_by_side" || nudge.severity === "alert" || (involvement === "occasional" && nudge.severity === "warning"));
+  const [onboardingReady, setOnboardingReady] = useState(false);
+  const [onboardingForced, setOnboardingForced] = useState(false);
+  const [onboardingStartedHere, setOnboardingStartedHere] = useState(false);
+  const onboardingSeenBefore = Boolean(journey?.completed_steps.includes("onboarding:shown"));
+  useEffect(() => {
+    if (journey?.phase !== "intro" || onboardingSeenBefore) return;
+    const timer = window.setTimeout(() => setOnboardingReady(true), 4000);
+    return () => window.clearTimeout(timer);
+  }, [journey?.phase, onboardingSeenBefore]);
+  // Zuri only takes focus on the very first visit: the moment she does, that is recorded so a return visit never repeats it.
+  useEffect(() => {
+    if (!journey || journey.phase !== "intro" || !onboardingReady || onboardingSeenBefore) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOnboardingStartedHere(true);
+    updateJourney({ ...journey, completed_steps: [...new Set([...journey.completed_steps, "onboarding:shown"])] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onboardingReady, journey?.phase, onboardingSeenBefore]);
+  const showOnboarding = journey?.phase === "intro" && (onboardingForced || onboardingStartedHere || (onboardingReady && !onboardingSeenBefore));
+  const [bubble, setBubble] = useState<string | null>(null);
+  useEffect(() => {
+    if (!accessToken || journey?.phase !== "intro" || !onboardingSeenBefore || onboardingStartedHere) return;
+    if (window.sessionStorage.getItem("zuri.bubble.dismissed")) return;
+    const controller = new AbortController();
+    void fetch(`${backendUrl}/api/zuri/greeting`, {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ visit: "returning", visit_count: 2, local_hour: new Date().getHours(), section: "Dashboard", welcome_shown_before: true }),
+    }).then((response) => (response.ok ? response.json() : null)).then((data: { message?: string } | null) => { if (data?.message) setBubble(data.message); }).catch(() => undefined);
+    return () => controller.abort();
+  }, [accessToken, journey?.phase, onboardingSeenBefore, onboardingStartedHere]);
+  const dismissBubble = () => { window.sessionStorage.setItem("zuri.bubble.dismissed", "1"); setBubble(null); };
+
+  type NextMove = { headline: string; goal: string; walkthrough: Walkthrough | null; chat_prompt: string | null; why?: string };
+  const [nextStep, setNextStep] = useState<{ primary: NextMove; alternatives: NextMove[] } | null>(null);
+  const [nextStepBusy, setNextStepBusy] = useState(false);
+  const [nextStepError, setNextStepError] = useState("");
+  const nextStepAt = useRef(0);
+  const loadNextStep = useCallback(async () => {
+    if (!accessToken) return;
+    setNextStepBusy(true);
+    setNextStepError("");
+    try {
+      const response = await fetch(`${backendUrl}/api/zuri/next-step?tz_offset_minutes=${-new Date().getTimezoneOffset()}&layout=${encodeURIComponent(JSON.stringify(loadLayout() ?? null))}`, { method: "POST", headers: { Authorization: `Bearer ${accessToken}` } });
+      if (!response.ok) throw new Error("Zuri could not decide on a next step right now.");
+      setNextStep((await response.json()) as { primary: NextMove; alternatives: NextMove[] });
+      nextStepAt.current = Date.now();
+    } catch (nextError) {
+      setNextStepError(nextError instanceof Error ? nextError.message : "Zuri could not decide on a next step right now.");
+    } finally {
+      setNextStepBusy(false);
+    }
+  }, [accessToken]);
+  const runNextStep = (move: NextMove) => {
+    if (move.walkthrough) setWalkthrough(move.walkthrough);
+    else { setAssistantDraft(move.chat_prompt ?? ""); setAssistantOpen(true); }
+  };
+  const nextStepBroker = linkedAccount.data?.broker ?? "";
+  useEffect(() => {
+    if (section !== "Dashboard" || journey?.phase !== "done" || !accessToken) return;
+    if (nextStepAt.current && Date.now() - nextStepAt.current < 10 * 60_000) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadNextStep();
+  }, [section, journey?.phase, accessToken, loadNextStep]);
+  useEffect(() => {
+    // Linking a broker changes what is best, so Zuri re-decides.
+    nextStepAt.current = 0;
+  }, [nextStepBroker]);
+
+  const finishOnboarding = async (result: OnboardingResult) => {
+    if (!journey) return;
+    saveInvolvement(result.involvement);
+    setInvolvement(result.involvement);
+    updateZuriAccess({ see: result.seeScreen, act: result.actOnScreen });
+    let tour: Walkthrough | null = null;
+    try {
+      const response = await fetch(`${backendUrl}/api/zuri/onboarding/preferences`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ tour: result.tour, involvement: result.involvement, see_screen: result.seeScreen,         act_on_screen: result.actOnScreen, market_levels: result.marketLevels }),
+      });
+              if (response.ok) {
+                const saved = (await response.json()) as { walkthrough?: Walkthrough | null; layout?: MarketLayout };
+                tour = saved.walkthrough ?? null;
+                if (saved.layout?.markets.length) { saveLayout(saved.layout); setLayout(saved.layout); }
+              }
+    } catch { /* the choices still apply locally */ }
+    const experience = session?.user.user_metadata?.trading_experience as string | undefined;
+    updateJourney({
+      ...journey, phase: "done", mode: "assistant",
+      level: journey.level ?? (experience === "Experienced" ? "advancing" : experience === "Learning the basics" ? "building" : "foundations"),
+      completed_steps: [...new Set([...journey.completed_steps, "guide:done"])],
+    });
+    if (tour) setWalkthrough(tour);
+  };
+
+  const buildScreenState = () => ({
+    quote: symbol.hasQuote && watchlistSymbols.includes(symbol.symbol) ? { symbol: symbol.symbol, price: symbol.price, change: symbol.change } : null,
+    watchlist: watchlistInstruments.map((item) => ({ symbol: item.symbol, price: item.price, change: item.change })),
+    available_symbols: instruments.map((item) => item.symbol),
+    positions: (linkedAccount.data?.positions ?? []).slice(0, 30).map((position) => ({
+      symbol: position.symbol, side: position.side, quantity: position.quantity, avg_entry_price: position.avg_entry_price,
+      current_price: position.current_price, unrealized_pl: position.unrealized_pl, unrealized_plpc: position.unrealized_plpc,
+    })),
+    news: (marketNews?.articles ?? []).slice(0, 8).map((article) => ({ title: article.title.slice(0, 220), source: article.source, published_at: article.published_at })),
+    journal: journalEntries.slice(0, 10).map((entry) => ({ symbol: entry.symbol, side: entry.side, setup: entry.setup.slice(0, 60), note: entry.note.slice(0, 240), created_at: entry.createdAt })),
+    broker: linkedAccount.data?.broker_name ?? null,
+    equity: linkedAccount.data?.account.equity ?? null,
+    max_trade_risk_percent: userPreferences?.max_trade_risk_percent ?? null,
+    max_daily_loss_percent: userPreferences?.max_daily_loss_percent ?? null,
+    active_drawing_tool: activeTool ? activeTool.slice(0, 10) : null,
+    journal_draft_open: journalDraftOpen,
+    settings_tab: section === "Settings" ? settingsRequest?.tab ?? null : null,
+  });
+
+  // Every action runs only after the user pressed Approve on its card.
+  const executeZuriAction = async (action: ZuriAction): Promise<string> => {
+    const args = action.args;
+    const target = typeof args.symbol === "string" ? args.symbol : "";
+    if (action.type === "open_chart") {
+      if (!watchlistSymbols.includes(target)) await updateWatchlist([...watchlistSymbols, target]);
+      setSelectedSymbol(target);
+      if (typeof args.timeframe === "string" && timeframes.includes(args.timeframe)) setTimeframe(args.timeframe);
+      setSection("Charts");
+      return `Opened ${target}.`;
+    }
+    if (action.type === "add_to_watchlist") {
+      if (!watchlistSymbols.includes(target)) await updateWatchlist([...watchlistSymbols, target]);
+      return `Added ${target} to your watchlist.`;
+    }
+    if (action.type === "remove_from_watchlist") {
+      if (watchlistSymbols.length > 1) removeInstrument(target);
+      return `Removed ${target} from your watchlist.`;
+    }
+    if (action.type === "set_risk_limits") {
+      if (!userPreferences) throw new Error("Your preferences haven't loaded yet.");
+      const next = { ...userPreferences };
+      if (typeof args.max_trade_risk_percent === "number") next.max_trade_risk_percent = args.max_trade_risk_percent;
+      if (typeof args.max_daily_loss_percent === "number") next.max_daily_loss_percent = args.max_daily_loss_percent;
+      await saveUserPreferences(next);
+      setUserPreferences(next);
+      return "Your risk limits are saved.";
+    }
+    if (action.type === "navigate") {
+      setSection(args.section as Section);
+      return `Switched to ${String(args.section)}.`;
+    }
+    if (action.type === "start_walkthrough") {
+      setWalkthrough(args.walkthrough as Walkthrough);
+      setAssistantOpen(false);
+      return "Starting the guided walkthrough.";
+    }
+    if (action.type === "look_at_screen") {
+      await startScreenShare();
+      return "Your browser is now sharing this tab with Zuri. Ask me again and I'll look.";
+    }
+    throw new Error("Zuri doesn't know how to do that yet.");
+  };
+
+  // Called only from the trade card's own confirm button; it reuses the same endpoint and server-side checks as the Trade tab.
+  const placeZuriTrade = async (action: ZuriAction, phrase: string): Promise<string> => {
+    if (!linkedAccount.data) throw new Error("No broker is linked.");
+    const { broker_symbol: orderSymbol, side, quantity, stop_loss: stop, take_profit: target } = action.args as { broker_symbol: string; side: string; quantity: number; stop_loss?: number; take_profit?: number };
+    const response = await fetch(`${backendUrl}/api/brokers/${linkedAccount.data.broker}/orders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ symbol: orderSymbol, side, quantity, confirmed: true, confirmation_phrase: phrase, ...(stop !== undefined && target !== undefined ? { stop_loss: stop, take_profit: target } : {}) }),
+    });
+    const body = await response.json().catch(() => ({})) as { detail?: unknown; status?: string };
+    if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The order was rejected.");
+    linkedAccount.refresh();
+    captureScreenForTrade(accessToken, orderSymbol, reloadJournal);
+    return `${linkedAccount.data.environment === "live" ? "LIVE" : "Paper"} order sent: ${body.status ?? "submitted"}.`;
+  };
+
+  const applyStepRef = useRef<(step: WalkthroughStep) => void>(() => undefined);
+  useEffect(() => { applyStepRef.current = (step) => {
+    setSection(step.section as Section);
+    if (step.symbol && watchlistSymbols.includes(step.symbol)) setSelectedSymbol(step.symbol);
+    if (step.timeframe && timeframes.includes(step.timeframe)) setTimeframe(step.timeframe);
+    if (step.prefill?.search !== undefined) setQuery(step.prefill.search);
+    if (step.settings_tab || step.prefill?.max_trade_risk_percent !== undefined || step.prefill?.max_daily_loss_percent !== undefined) {
+      setSettingsRequest((current) => ({ tab: step.settings_tab, prefill: step.prefill, n: (current?.n ?? 0) + 1 }));
+    }
+  }; });
+  const applyWalkthroughStep = useCallback((step: WalkthroughStep) => applyStepRef.current(step), []);
+  const closeWalkthrough = useCallback((finished: boolean) => {
+    setWalkthrough((current) => {
+      if (current) logZuriEvent(accessToken, finished ? "walkthrough_finished" : "walkthrough_exited", current.title);
+      return null;
+    });
+  }, [accessToken]);
+
   return (
     <main className="terminal-shell">
       <header className="topbar">
@@ -378,8 +624,8 @@ function TradingWorkspace() {
       </header>
       <div className={section === "Settings" ? "workspace settings-workspace" : "workspace"}>
         <nav className="primary-nav" aria-label="Primary navigation">
-          <div className="nav-main">{(["Charts", "Dashboard", "Trade", "History", "Journal"] as Section[]).map((item) => <button key={item} onClick={() => setSection(item)} className={section === item ? "nav-item selected" : "nav-item"} title={item}><Icon name={item}/><span>{item}</span></button>)}</div>
-          <div className="nav-bottom"><button onClick={() => setSection("Settings")} className={section === "Settings" ? "nav-item selected" : "nav-item"} title="Settings"><Icon name="Settings"/><span>Settings</span></button><div className="nav-help">?</div></div>
+          <div className="nav-main">{(["Charts", "Dashboard", "Trade", "History", "Journal"] as Section[]).map((item) => <button key={item} data-zuri-target={`nav-${item}`} onClick={() => setSection(item)} className={section === item ? "nav-item selected" : "nav-item"} title={item}><Icon name={item}/><span>{item}</span></button>)}</div>
+          <div className="nav-bottom"><button data-zuri-target="nav-Settings" onClick={() => setSection("Settings")} className={section === "Settings" ? "nav-item selected" : "nav-item"} title="Settings"><Icon name="Settings"/><span>Settings</span></button><div className="nav-help">?</div></div>
         </nav>
         <div className="content-column">
           <div className="page-heading"><div><div className="eyebrow">PERSONAL TRADING DESK <span>•</span> {deskDate} <span>•</span> <time>{deskTime}</time></div><h1>{section === "Charts" ? "Charts" : section}</h1></div></div>
@@ -387,24 +633,60 @@ function TradingWorkspace() {
           {workspaceDataUserId !== session?.user.id ? (
             <div className="content-card"><p>{dataError ? "Your saved workspace data could not be loaded. Please try again after checking the database setup." : "Loading your saved workspace…"}</p></div>
           ) : <>
-          {section === "Charts" && <>
+          {section === "Charts" && watchlistInstruments.length === 0 && (() => {
+            const interests = Array.isArray(session?.user.user_metadata?.primary_markets) ? (session!.user.user_metadata.primary_markets as string[]) : [];
+            const starters = [...instruments].sort((a, b) => Number(interests.includes(b.group)) - Number(interests.includes(a.group)));
+            return <section className="chart-welcome" aria-label="Pick your first market">
+              <div className="chart-welcome-head">
+                <span className="chart-welcome-spark">✳</span>
+                <h2>Your chart desk is ready. Pick a first market.</h2>
+                <p>Charts show one market at a time, so your desk starts empty until you choose what to follow. Pick one below to add it to your watchlist and open its chart. You can change it any time.</p>
+              </div>
+              <div className="chart-welcome-grid">
+                {starters.map((item) => <button key={item.symbol} type="button" className="chart-welcome-card" onClick={() => { addInstrument(item.symbol); setSelectedSymbol(item.symbol); }}>
+                  <span className={`watch-icon ${item.group.toLowerCase()}`}>{item.icon}</span>
+                  <span className="chart-welcome-name"><b>{item.symbol}</b><small>{item.name}</small></span>
+                  <span className="chart-welcome-quote"><b>{item.price}</b><small className={item.hasQuote ? (item.up ? "positive" : "negative") : "muted"}>{item.change}</small></span>
+                  <span className="chart-welcome-add">{interests.includes(item.group) ? "Your interest · " : ""}Add and open chart →</span>
+                </button>)}
+              </div>
+              <div className="chart-welcome-foot">
+                <span>Not sure where to start? Zuri can pick with you.</span>
+                <button type="button" className="outline-button" onClick={() => { setAssistantDraft("I'm new and my chart desk is empty. Which market should I start with, and can you open it for me?"); setAssistantOpen(true); }}>Ask Zuri to help me choose</button>
+              </div>
+            </section>;
+          })()}
+          {section === "Charts" && watchlistInstruments.length > 0 && <>
             <div className="journal-chart-bar">
               <div className="journal-chart-symbol"><span className={`watch-icon ${symbol.group.toLowerCase()}`}>{symbol.icon}</span><span><b>{symbol.symbol}</b><small>{symbol.name}</small></span></div>
-              <div className="journal-intervals" aria-label="Chart interval">{timeframes.map((item) => <button key={item} className={timeframe === item ? "time-button active" : "time-button"} onClick={() => setTimeframe(item)}>{item}</button>)}</div>
-              <div className="journal-chart-actions">
+              <div className="journal-intervals" data-zuri-target="chart-timeframes" aria-label="Chart interval">{timeframes.map((item) => <button key={item} className={timeframe === item ? "time-button active" : "time-button"} onClick={() => setTimeframe(item)}>{item}</button>)}</div>
+              <div className="journal-chart-actions" data-zuri-target="journal-actions">
                 <button className="journal-capture-button" onClick={() => { setJournalDraftSide("Watching"); setJournalDraftOpen(true); }}>＋ <span>Note</span></button>
                 <button className="journal-plan-button long" onClick={() => { setJournalDraftSide("Long"); setJournalDraftOpen(true); }}>↗ <span>Long plan</span></button>
                 <button className="journal-plan-button short" onClick={() => { setJournalDraftSide("Short"); setJournalDraftOpen(true); }}>↘ <span>Short plan</span></button>
                 <button className="journal-saved-button" onClick={() => setSection("Journal")}>Journal <span>{journalEntries.length}</span></button>
               </div>
             </div>
-            <div className="chart-toolbar"><button className="symbol-select" onClick={() => setWatchlistOpen(!watchlistOpen)}><span className="coin btc">{symbol.icon}</span><b>{symbol.symbol}</b><span className="chevron">⌄</span></button><div className="toolbar-divider"/>{timeframes.map((item) => <button key={item} className={timeframe === item ? "time-button active" : "time-button"} onClick={() => setTimeframe(item)}>{item}</button>)}<div className="toolbar-divider"/><button className="indicator-button">⌁ <span>Indicators</span></button><button className="chart-icon-button" title="Chart layout">▦</button><button className="chart-icon-button" title="Take snapshot">⌗</button><span className="toolbar-spacer"/><span className="chart-live"><i/>DEMO</span></div>
-            <div className="market-summary"><div><span className="instrument-name">{symbol.name} <span className="exchange-tag">· {symbol.group === "Crypto" ? "COINBASE" : "GLOBAL"}</span></span><strong>{symbol.price}</strong><span className={symbol.up ? "positive" : "negative"}>{symbol.change} <small>today</small></span></div><div className="ohlc"><span>O <b>85,742</b></span><span>H <b>86,104</b></span><span>L <b>85,518</b></span><span>C <b>85,890</b></span><span>Vol <b>1.24B</b></span></div></div>
-            <section className="chart-panel"><div className="chart-labels"><span><i className="legend-candle"/> Candles</span><span><i className="legend-line"/> EMA 20</span><span className="chart-label-right">USD <span>⌄</span></span></div><div className="chart-stage"><aside className="drawing-toolbar">{chartTools.slice(0, 9).map((tool, index) => <button key={`${tool}-draw-${index}`} className={activeTool === tool ? "drawing-button chosen" : "drawing-button"} title={`Drawing tool ${index + 1}`} onClick={() => setActiveTool(activeTool === tool ? "" : tool)}>{tool}</button>)}<span className="draw-separator"/><button className="drawing-button" title="Remove drawings" onClick={() => setActiveTool("")}>⌫</button></aside><Chart symbol={symbol} timeframe={timeframe} drawing={activeTool} aiOnChart={aiOnChart}/></div><div className="chart-footer"><span>⌖ Crosshair</span><span>⤢ Auto</span><span className="chart-footer-spacer"/><span>1D</span><span>5D</span><span>1M</span><span>6M</span><span>1Y</span><span>ALL</span><span className="utc">17:24:08 UTC</span></div></section>
-            <div className="lower-tabs"><button className="lower-tab active">Overview</button><button className="lower-tab">Ideas <span className="count">3</span></button><button className="lower-tab">Financials</button><button className="lower-tab">News <span className="count">5</span></button><span className="lower-tabs-right">Data delayed by up to 15 min</span></div>
-            <div className="below-chart"><section className="watch-summary"><div className="section-title"><div><span className="small-label">YOUR WATCHLIST</span><h2>Market pulse</h2></div><button className="text-action" onClick={() => setWatchlistOpen(!watchlistOpen)}>View watchlist ↗</button></div><div className="pulse-row"><span>Fear & Greed</span><strong>68 <small>Greed</small></strong><div className="sentiment-track"><i/></div><span className="positive">+6 pts</span></div><div className="pulse-row"><span>BTC dominance</span><strong>58.4%</strong><span className="muted">+0.3% this week</span></div></section><section className="ai-takeaway"><div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI AI · DEMO CHART READ</span><span className="confidence">QUOTE CONTEXT</span></div><h2>{symbol.symbol} · {symbol.up ? "Upward" : "Downward"} bias</h2><p>{aiBrief}</p><div className="ai-foot"><span>Based on simulated quote data</span><button className="text-action" onClick={() => setAiExpanded(!aiExpanded)}>{aiExpanded ? "Hide analysis ↑" : "See full analysis →"}</button></div>{aiExpanded && <div className="ai-expanded">This prototype insight reflects the demo quote direction only. It is not live market analysis or a recommendation.</div>}</section></div>
+            <div className="chart-toolbar"><button className="symbol-select" onClick={() => setWatchlistOpen(!watchlistOpen)}><span className="coin btc">{symbol.icon}</span><b>{symbol.symbol}</b><span className="chevron">⌄</span></button><div className="toolbar-divider"/>{timeframes.map((item) => <button key={item} className={timeframe === item ? "time-button active" : "time-button"} onClick={() => setTimeframe(item)}>{item}</button>)}</div>
+            <div className="market-summary" data-zuri-target="chart-panel"><div><span className="instrument-name">{symbol.name} <span className="exchange-tag">· {symbol.group === "Crypto" ? "COINBASE" : "GLOBAL"}</span></span><strong>{symbol.price}</strong><span className={symbol.hasQuote ? (symbol.up ? "positive" : "negative") : "muted"}>{symbol.change} <small>today</small></span></div><div className="ohlc">{symbol.hasQuote ? (symbolDetail === "simple" ? <span>Today&apos;s move: <b>{symbol.change}</b></span> : <><span>H <b>{symbol.high ?? "—"}</b></span><span>L <b>{symbol.low ?? "—"}</b></span>{symbol.volume && <span>Vol <b>{symbol.volume}</b></span>}</>) : <span>Loading the real quote…</span>}</div></div>
+            <section className="chart-panel"><div className="chart-labels"><span><i className="legend-candle"/> Candles</span><span><i className="legend-line"/> EMA 20</span><span className="chart-label-right">USD <span>⌄</span></span></div><div className="chart-stage"><aside className="drawing-toolbar">{chartTools.slice(0, 9).map((tool, index) => <button key={`${tool}-draw-${index}`} className={activeTool === tool ? "drawing-button chosen" : "drawing-button"} title={`Drawing tool ${index + 1}`} onClick={() => setActiveTool(activeTool === tool ? "" : tool)}>{tool}</button>)}<span className="draw-separator"/><button className="drawing-button" title="Remove drawings" onClick={() => setActiveTool("")}>⌫</button></aside><Chart symbol={symbol} timeframe={timeframe} drawing={activeTool} aiOnChart={aiOnChart}/>            </div></section>
+                        <div className="lower-tabs"><span className="lower-tabs-right">Prices from a public market-data feed, delayed by up to 15 minutes</span></div>
+                        <div className="below-chart"><section className="watch-summary"><div className="section-title"><div><span className="small-label">YOUR WATCHLIST</span><h2>{watchlistInstruments.length} {watchlistInstruments.length === 1 ? "symbol" : "symbols"}</h2></div><button className="text-action" onClick={() => setWatchlistOpen(!watchlistOpen)}>View watchlist ↗</button></div>{watchlistInstruments.map((item) => <div key={item.symbol} className="pulse-row"><span>{item.symbol}</span><strong>{item.price}</strong><span className={item.hasQuote ? (item.up ? "positive" : "negative") : "muted"}>{item.change}</span></div>)}</section><section className="ai-takeaway" data-zuri-target="ai-takeaway"><div className="ai-heading"><span className="ai-spark">✳</span><span className="small-label">ZURI · {symbol.symbol} TODAY</span><span className="confidence">REAL QUOTE</span></div><h2>{symbol.hasQuote ? `${symbol.symbol} · ${symbol.up ? "Up" : "Down"} ${symbol.change.replace(/^[+−]/, "")} today` : `${symbol.symbol} · loading`}</h2><p>{aiBrief}</p><div className="ai-foot"><span>Based on the real day quote</span><button className="text-action" onClick={() => { setAssistantDraft(`Please analyse the ${symbol.symbol} chart for me.`); setAssistantOpen(true); }}>Ask Zuri for a full analysis →</button></div></section></div>
             {journalDraftOpen && <JournalCapture symbol={symbol} timeframe={timeframe} initialSide={journalDraftSide} onSave={saveJournalEntry} onCancel={() => setJournalDraftOpen(false)} />}
           </>}
+          {section === "Dashboard" && journey?.phase === "done" && (
+            <section className="content-card zuri-next" data-zuri-target="zuri-next">
+              <div className="section-title"><div><span className="small-label">ZURI · YOUR BEST NEXT MOVE</span><h2>{nextStep ? nextStep.primary.headline : nextStepError ? "I couldn't decide just now" : "Thinking about what's best for you…"}</h2></div><button className="text-action" disabled={nextStepBusy} onClick={() => void loadNextStep()}>{nextStepBusy ? "Thinking…" : "Re-check ↻"}</button></div>
+              {nextStep && <>
+                <p>{nextStep.primary.why}</p>
+                <div className="zuri-next-actions">
+                  <button type="button" className="zuri-next-primary" onClick={() => runNextStep(nextStep.primary)}>{nextStep.primary.walkthrough ? "Do it with me" : "Talk it through"}</button>
+                  {nextStep.alternatives.map((item) => <button key={item.headline} type="button" className="zuri-next-alt" onClick={() => runNextStep(item)}>{item.headline}</button>)}
+                </div>
+              </>}
+              {nextStepError && <p className="muted">{nextStepError}</p>}
+            </section>
+          )}
           {section === "Dashboard" && (
             <Dashboard
               setSection={setSection}
@@ -431,10 +713,10 @@ function TradingWorkspace() {
               ) : null}
             />
           )}
-          {section === "Trade" && <TradeView symbol={symbol} orderSide={orderSide} setOrderSide={setOrderSide} linked={linkedAccount} token={session?.access_token ?? ""} onTraded={reloadJournal} riskPercent={userPreferences?.max_trade_risk_percent ?? 1}/>}
+          {section === "Trade" && <TradeView symbol={symbol} instruments={instruments} orderSide={orderSide} setOrderSide={setOrderSide} linked={linkedAccount} token={session?.access_token ?? ""} onTraded={reloadJournal} riskPercent={userPreferences?.max_trade_risk_percent ?? 1}/>}
           {section === "History" && <HistoryView linked={linkedAccount} token={accessToken} refreshKey={journalRefresh} />}
           {section === "Journal" && <JournalView entries={journalEntries} token={accessToken} refreshKey={journalRefresh} onReload={reloadJournal} onNewEntry={() => { setSection("Charts"); setJournalDraftSide("Watching"); setJournalDraftOpen(true); }} onDelete={(id) => void removeJournalEntry(id)} />}
-          {section === "Settings" && session && <SettingsView linked={linkedAccount} userId={session.user.id} email={session.user.email ?? ""} preferences={userPreferences} onSavePreferences={async (preferences) => {
+          {section === "Settings" && session && <SettingsView request={settingsRequest} linked={linkedAccount} userId={session.user.id} email={session.user.email ?? ""} preferences={userPreferences} onSavePreferences={async (preferences) => {
             await saveUserPreferences(preferences);
             setUserPreferences(preferences);
             setTimeframe(preferences.default_timeframe);
@@ -448,68 +730,42 @@ function TradingWorkspace() {
             userId={session.user.id}
             eventContext={backtestNewsContext}
             onClearEventContext={() => setBacktestNewsContext(null)}
-            visible={section === "Charts"}
+            visible={section === "Charts" && watchlistInstruments.length > 0}
           />}
           </>}
         </div>
-        {section !== "Settings" && <aside className={watchlistOpen ? "right-rail" : "right-rail collapsed"}>
-          <div className="rail-head"><div><h2>Quotes</h2><span className="rail-count"><i className="quote-live-dot"/> {watchlistInstruments.length} symbols · SIMULATED</span></div><button className="rail-action" title="Add symbol" onClick={() => document.getElementById("market-search")?.focus()}>＋</button><button className="rail-action" title="Collapse quotes" onClick={() => setWatchlistOpen(false)}>⌄</button></div>
+        {section !== "Settings" && <aside data-zuri-target="quotes-rail" className={watchlistOpen ? "right-rail" : "right-rail collapsed"}>
+          <div className="rail-head"><div><h2>Quotes</h2><span className="rail-count"><i className="quote-live-dot"/> {watchlistInstruments.length} symbols · delayed ≤15 min</span></div><button className="rail-action" title="Add symbol" onClick={() => document.getElementById("market-search")?.focus()}>＋</button><button className="rail-action" title="Collapse quotes" onClick={() => setWatchlistOpen(false)}>⌄</button></div>
           {watchlistOpen && <>
-            <label className="search-box"><span>⌕</span><input id="market-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search quotes"/><kbd>/</kbd></label>
-            <div className="watchlist-columns"><span>SYMBOL</span><span>BID</span><span>ASK</span></div>
+            <label className="search-box" data-zuri-target="market-search"><span>⌕</span><input id="market-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search quotes"/><kbd>/</kbd></label>
+            <div className="watchlist-columns"><span>SYMBOL</span><span>PRICE</span><span>CHANGE</span></div>
             <div className="watchlist-items">
-              {filteredInstruments.map((item) => {
-                const isInWatchlist = watchlistSymbols.includes(item.symbol);
-                const midPrice = Number(item.price.replace(/,/g, ""));
-                const quoteSpread = midPrice * (item.group === "Forex" ? 0.0001 : 0.00007);
-                const quotePrecision = item.group === "Forex" ? 5 : 2;
-                const formatQuote = (price: number) => price.toLocaleString("en-US", { minimumFractionDigits: quotePrecision, maximumFractionDigits: quotePrecision });
-                return <div key={item.symbol} className={isInWatchlist && symbol.symbol === item.symbol ? "watch-row selected" : "watch-row"}>
-                <button className="watch-row-main" onClick={() => isInWatchlist ? (setSelectedSymbol(item.symbol), setSection("Charts")) : addInstrument(item.symbol)} aria-label={isInWatchlist ? `Select ${item.symbol}` : `Preview ${item.symbol} quote and add to watchlist`}>
-                  <span className={`watch-icon ${item.group.toLowerCase()}`}>{item.icon}</span><span className="watch-symbol"><b>{item.symbol}</b><small>{item.group}</small></span><span key={`${item.tickSequence}-bid`} className={`quote-price tick-${item.tickDirection ?? "up"}`}>{formatQuote(Math.max(0.00001, midPrice - quoteSpread / 2))}</span><span key={`${item.tickSequence}-ask`} className={`quote-price tick-${item.tickDirection ?? "up"}`}>{formatQuote(midPrice + quoteSpread / 2)}</span>
-                </button>
-                <button className="watch-remove" title={isInWatchlist ? `Remove ${item.symbol} from watchlist` : `Add ${item.symbol} to watchlist`} aria-label={isInWatchlist ? `Remove ${item.symbol} from watchlist` : `Add ${item.symbol} to watchlist`} onClick={() => isInWatchlist ? removeInstrument(item.symbol) : addInstrument(item.symbol)}>{isInWatchlist ? "×" : "+"}</button>
-              </div>;
-              })}
+              {layoutActive && layout?.mode === "tabs" && <div className="market-tabs" role="tablist" aria-label="Markets">{marketOrder.map((market) => <button key={market} role="tab" aria-selected={activeMarket === market} className={activeMarket === market ? "market-tab active" : "market-tab"} onClick={() => setMarketTab(market)}>{market} <small>{filteredInstruments.filter((item) => item.group === market).length}</small></button>)}</div>}
+              {layoutActive && layout?.mode === "sections"
+                ? marketOrder.map((market) => {
+                    const open = openMarkets[market] ?? !(layout?.markets.find((entry) => entry.market === market)?.collapsed);
+                    return <div key={market} className="market-section"><button className="market-section-head" aria-expanded={open} onClick={() => setOpenMarkets((current) => ({ ...current, [market]: !open }))}><span>{open ? "▾" : "▸"} {market}</span><small>{filteredInstruments.filter((item) => item.group === market).length}</small></button>{open && filteredInstruments.filter((item) => item.group === market).map(renderQuoteRow)}</div>;
+                  })
+                : (layoutActive && layout?.mode === "tabs" ? filteredInstruments.filter((item) => item.group === activeMarket) : filteredInstruments).map(renderQuoteRow)}
               {filteredInstruments.length === 0 && <div className="empty-search">{watchlistSymbols.length === 0 && !query ? "Your watchlist is empty. Search to add symbols." : "No matching markets"}</div>}
             </div>
             <div className="rail-section-heading"><span>ZURI AI OVERVIEW</span><span className="live-dot"/></div>
             <section className="ai-overview-card">
               <div className="ai-overview-header">
                 <div className="ai-badge"><span className="ai-badge-mark">✦</span><span>ZURI AI</span></div>
-                <span className="ai-overview-status">LIVE</span>
+                <span className="ai-overview-status">{symbol.hasQuote ? "REAL QUOTE" : "WAITING"}</span>
               </div>
-              <h3>{symbol.symbol} is in a {symbol.up ? "bullish continuation" : "defensive rotation"} regime.</h3>
-              <p>
-                {symbol.up
-                  ? "Momentum is holding above the local structure and the tape remains constructive. Keep risk tight and let the trend confirm on pullbacks."
-                  : "The tape is softening under pressure and the broader rotation is favoring caution. Respect levels, size down, and wait for confirmation before adding exposure."}
-              </p>
+              <h3>{symbol.symbol} today</h3>
+              <p>{aiBrief}</p>
               <div className="ai-overview-grid">
-                <div className="ai-metric">
-                  <span>Bias</span>
-                  <strong className={symbol.up ? "positive" : "negative"}>{symbol.up ? "Bullish" : "Bearish"}</strong>
-                </div>
-                <div className="ai-metric">
-                  <span>Risk</span>
-                  <strong>1.2%</strong>
-                </div>
-                <div className="ai-metric">
-                  <span>Trend</span>
-                  <strong>{symbol.up ? "Up" : "Down"}</strong>
-                </div>
-                <div className="ai-metric">
-                  <span>Setup</span>
-                  <strong>Breakout</strong>
-                </div>
-              </div>
-              <div className="ai-overview-foot">
-                <span>Signal score</span>
-                <strong>{symbol.up ? "82/100" : "67/100"}</strong>
+                <div className="ai-metric"><span>Change</span><strong className={symbol.hasQuote ? (symbol.up ? "positive" : "negative") : ""}>{symbol.change}</strong></div>
+                <div className="ai-metric"><span>Price</span><strong>{symbol.price}</strong></div>
+                {symbolDetail === "full" && <><div className="ai-metric"><span>Day high</span><strong>{symbol.high ?? "—"}</strong></div>
+                <div className="ai-metric"><span>Day low</span><strong>{symbol.low ?? "—"}</strong></div></>}
               </div>
               <div className="ai-overview-actions">
                 <button className="news-link" aria-pressed={aiOnChart} onClick={() => setAiOnChart(!aiOnChart)}>{aiOnChart ? "Hide chart context" : "Add to chart"}</button>
-                <button className="text-action">Deep dive →</button>
+                <button className="text-action" onClick={() => { setAssistantDraft(`Please analyse the ${symbol.symbol} chart for me.`); setAssistantOpen(true); }}>Deep dive →</button>
               </div>
             </section>
             <MarketNewsSection
@@ -526,8 +782,24 @@ function TradingWorkspace() {
         </aside>}
       </div>
       <footer className="statusbar"><span><i className="live-dot"/> All systems operational</span><span>{linkedAccount.data ? (linkedAccount.data.environment === "live" ? "Live trading" : "Paper trading") : "Trading"} <b>{linkedAccount.data ? "ON" : "OFF"}</b></span><span>Prices in USD</span><span className="status-spacer"/><span>⌁ &nbsp;Help center</span></footer>
-      {journey?.phase === "intro" && (
-        <ZuriWelcome experience={session?.user.user_metadata?.trading_experience as string | undefined} accessToken={session?.access_token ?? ""} section={section} onFinish={() => updateJourney({ ...journey, phase: "done", mode: journey.mode ?? "assistant" })} onSkip={() => updateJourney({ ...journey, phase: "done", mode: journey.mode ?? "assistant", completed_steps: [...new Set([...journey.completed_steps, "guide:skipped"])] })} />
+      {showOnboarding && journey && (
+        <ZuriOnboarding
+          accessToken={accessToken}
+          initialSee={zuriAccess.see}
+          initialAct={zuriAccess.act}
+          onFinish={finishOnboarding}
+          onSkip={() => { setOnboardingForced(false); updateJourney({ ...journey, phase: "done", mode: "assistant", completed_steps: [...new Set([...journey.completed_steps, "guide:skipped"])] }); }}
+        />
+      )}
+      {bubble && !showOnboarding && (
+        <div className="zuri-bubble" role="status">
+          <p>{bubble}</p>
+          <div className="zuri-bubble-actions">
+            <button type="button" onClick={() => { setAssistantDraft(""); setAssistantOpen(true); dismissBubble(); }}>Reply to Zuri</button>
+            <button type="button" onClick={() => { dismissBubble(); setOnboardingForced(true); }}>Set me up</button>
+            <button type="button" className="muted" onClick={dismissBubble}>Not now</button>
+          </div>
+        </div>
       )}
       {journey?.phase === "done" && !journey.completed_steps.includes("guide:skipped") && !journey.completed_steps.includes("guide:done") && (
         <ZuriGuide accessToken={session?.access_token ?? ""} section={section} journey={journey} onJourney={updateJourney} setSection={setSection} />
@@ -543,7 +815,20 @@ function TradingWorkspace() {
         onOpenChange={setAssistantOpen}
         draft={assistantDraft}
         setDraft={setAssistantDraft}
+        access={zuriAccess}
+        onAccess={updateZuriAccess}
+        buildScreen={buildScreenState}
+        executeAction={executeZuriAction}
+        placeTrade={placeZuriTrade}
+        broker={linkedAccount.data?.broker_name ?? null}
+        environment={linkedAccount.data?.environment ?? null}
+        riskLimit={userPreferences?.max_trade_risk_percent ?? null}
+        nudges={visibleNudges}
+        onDismissNudge={dismissNudge}
+        involvement={involvement}
+        onInvolvement={changeInvolvement}
       />
+      {walkthrough && <ZuriTakeover walkthrough={walkthrough} onApplyStep={applyWalkthroughStep} onClose={closeWalkthrough} />}
     </main>
   );
 }
@@ -561,6 +846,18 @@ function AuraAssistant({
   onOpenChange,
   draft,
   setDraft,
+  access,
+  onAccess,
+  buildScreen,
+  executeAction,
+  placeTrade,
+  broker,
+  environment,
+  riskLimit,
+  nudges,
+  onDismissNudge,
+  involvement,
+  onInvolvement,
 }: {
   section: Section;
   symbol: Instrument;
@@ -572,6 +869,18 @@ function AuraAssistant({
   onOpenChange: (open: boolean) => void;
   draft: string;
   setDraft: (draft: string) => void;
+  access: { see: boolean; act: boolean };
+  onAccess: (patch: Partial<{ see: boolean; act: boolean }>) => void;
+  buildScreen: () => Record<string, unknown>;
+  executeAction: (action: ZuriAction) => Promise<string>;
+  placeTrade: (action: ZuriAction, phrase: string) => Promise<string>;
+  broker: string | null;
+  environment: "paper" | "live" | null;
+  riskLimit: number | null;
+  nudges: ZuriNudge[];
+  onDismissNudge: (id: string) => void;
+  involvement: Involvement;
+  onInvolvement: (value: Involvement) => void;
 }) {
   const [messages, setMessages] = useState<AuraChatMessage[]>([
     {
@@ -582,6 +891,10 @@ function AuraAssistant({
   ]);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState("");
+  const [pending, setPending] = useState<ZuriAction[]>([]);
+  const [actionStatus, setActionStatus] = useState<Record<string, string>>({});
+  const sharing = useScreenShareActive();
+  const topNudge = nudges[0] ?? null;
   const selectedNewsArticle = newsRequest?.article ?? null;
   const messageListRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -618,10 +931,12 @@ function AuraAssistant({
     setMessages((current) => [...current, userMessage]);
     setDraft("");
     setError("");
+    setPending([]);
     setIsSending(true);
 
     try {
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8000";
+      const screenshot = access.see && sharing ? grabScreenFrame() : null;
       const response = await fetch(`${backendUrl}/api/assistant/chat`, {
         method: "POST",
         headers: {
@@ -630,10 +945,13 @@ function AuraAssistant({
         },
         body: JSON.stringify({
           messages: conversation,
+          ...(screenshot ? { screenshot } : {}),
           context: {
             section,
             symbol: symbol.symbol,
             timeframe,
+            permissions: { see_workspace: access.see, act: access.act },
+            ...(access.see ? { screen: buildScreen() } : {}),
             news_article: selectedNewsArticle ? {
               title: selectedNewsArticle.title,
               summary: selectedNewsArticle.summary,
@@ -644,7 +962,7 @@ function AuraAssistant({
           },
         }),
       });
-      const result = await response.json() as { reply?: unknown; detail?: unknown };
+      const result = await response.json() as { reply?: unknown; detail?: unknown; actions?: ZuriAction[] };
       if (!response.ok) {
         throw new Error(typeof result.detail === "string" ? result.detail : `AI request failed (${response.status}).`);
       }
@@ -656,6 +974,7 @@ function AuraAssistant({
         ...current,
         { id: crypto.randomUUID(), role: "assistant", content: reply },
       ]);
+      if (access.act && Array.isArray(result.actions)) setPending(result.actions.map((action) => ({ ...action, at: Date.now() })));
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to reach Zuri AI.");
     } finally {
@@ -663,8 +982,41 @@ function AuraAssistant({
     }
   };
 
+  const decideAction = async (action: ZuriAction, approve: boolean) => {
+    setPending((current) => current.filter((item) => item.id !== action.id));
+    if (!approve) {
+      logZuriEvent(accessToken, "declined", action.label);
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: "No problem, I won't do that." }]);
+      return;
+    }
+    try {
+      const outcome = await executeAction(action);
+      logZuriEvent(accessToken, "approved", action.label);
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: `Done. ${outcome}` }]);
+    } catch (actionError) {
+      setActionStatus((current) => ({ ...current, [action.id]: "failed" }));
+      setError(actionError instanceof Error ? actionError.message : "That action didn't work.");
+    }
+  };
+
+  const openNudge = (nudge: ZuriNudge) => {
+    logZuriEvent(accessToken, "nudge_opened", nudge.title);
+    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: `${nudge.title}. ${nudge.body}` }]);
+    onDismissNudge(nudge.id);
+    onOpenChange(true);
+  };
+
   return (
     <div className="aura-assistant">
+      {!isOpen && topNudge && (
+        <div className={`aura-nudge ${topNudge.severity}`} role="status">
+          <button type="button" className="aura-nudge-body" onClick={() => openNudge(topNudge)}>
+            <strong>{topNudge.title}</strong>
+            <span>{topNudge.body}</span>
+          </button>
+          <button type="button" aria-label="Dismiss notice" onClick={() => onDismissNudge(topNudge.id)}>×</button>
+        </div>
+      )}
       {isOpen && (
         <section className="aura-panel" aria-label="Zuri AI trading companion">
           <header className="aura-panel-header">
@@ -678,6 +1030,16 @@ function AuraAssistant({
           <div className="aura-context">
             <span className="aura-context-dot" />
             With you in <b>{section}</b><span>·</span><b>{symbol.symbol}</b><span>·</span>{timeframe}
+          </div>
+          <div className="aura-access" aria-label="What Zuri may do">
+            <label><input type="checkbox" checked={access.see} onChange={(event) => onAccess({ see: event.target.checked })} /> See my workspace</label>
+            <label><input type="checkbox" checked={access.act} onChange={(event) => onAccess({ act: event.target.checked })} /> Act for me (I approve each step)</label>
+            {access.see && <button type="button" className="aura-share" onClick={() => void startScreenShare().catch((shareError: unknown) => setError(shareError instanceof Error ? shareError.message : "Screen sharing was cancelled."))} disabled={sharing}>{sharing ? "Seeing your screen" : "Show Zuri my screen"}</button>}
+            <label>How involved I am <select value={involvement} onChange={(event) => onInvolvement(event.target.value as Involvement)}>
+              <option value="side_by_side">Side-by-side buddy</option>
+              <option value="occasional">Occasional buddy</option>
+              <option value="on_demand">Need-to-know buddy</option>
+            </select></label>
           </div>
           {selectedNewsArticle && (
             <div className="aura-news-context">
@@ -694,6 +1056,33 @@ function AuraAssistant({
               </div>
             ))}
             {isSending && <div className="aura-typing" role="status"><span /><span /><span /> Zuri is thinking</div>}
+            {pending.map((action) => action.type === "propose_trade" ? (
+              <ZuriTradeCard
+                key={action.id}
+                action={action}
+                broker={broker}
+                environment={environment}
+                riskLimit={riskLimit}
+                onCancel={() => void decideAction(action, false)}
+                onConfirm={async (phrase) => {
+                  setPending((current) => current.filter((item) => item.id !== action.id));
+                  try {
+                    const outcome = await placeTrade(action, phrase);
+                    logZuriEvent(accessToken, "approved", `Order confirmed by user: ${action.label}`);
+                    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: outcome }]);
+                  } catch (tradeError) {
+                    logZuriEvent(accessToken, "declined", `Order failed: ${action.label}`);
+                    setError(tradeError instanceof Error ? tradeError.message : "The order failed.");
+                  }
+                }}
+              />
+            ) : (
+              <div className="aura-action" key={action.id}>
+                <span>ZURI WANTS TO</span>
+                <strong>{action.label}</strong>
+                <div><button type="button" className="approve" onClick={() => void decideAction(action, true)}>Approve</button><button type="button" onClick={() => void decideAction(action, false)}>Not now</button></div>
+              </div>
+            ))}
             {error && <p className="aura-error" role="alert">{error}</p>}
           </div>
           {messages.length === 1 && (
@@ -715,7 +1104,7 @@ function AuraAssistant({
             />
             <button type="submit" aria-label="Send message" disabled={!draft.trim() || isSending}>↑</button>
           </form>
-          <p className="aura-disclaimer">Educational support only · no trades are submitted</p>
+          <p className="aura-disclaimer">{access.act ? "Zuri only acts after you approve · no trades are submitted" : "Educational support only · no trades are submitted"}</p>
         </section>
       )}
       <button
@@ -929,13 +1318,14 @@ function Dashboard({
   );
 }
 function Metric({ label, value, change }: { label: string; value: string; change: string }) { return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small className={change.startsWith("+") ? "positive" : "muted"}>{change}</small></div>; }
-function TradeView({ symbol, orderSide, setOrderSide, linked, token, onTraded, riskPercent }: { symbol: Instrument; orderSide: "Buy" | "Sell"; setOrderSide: (side: "Buy" | "Sell") => void; linked: LinkedAccountState; token: string; onTraded: () => void; riskPercent: number }) {
+function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token, onTraded, riskPercent }: { symbol: Instrument; instruments: Instrument[]; orderSide: "Buy" | "Sell"; setOrderSide: (side: "Buy" | "Sell") => void; linked: LinkedAccountState; token: string; onTraded: () => void; riskPercent: number }) {
   const [stopLoss, setStopLoss] = useState("");
   const [takeProfit, setTakeProfit] = useState("");
-  const [tradeSymbol, setTradeSymbol] = useState(symbol);
+  const [tradeBase, setTradeSymbol] = useState(symbol);
+  const tradeSymbol = instruments.find((item) => item.symbol === tradeBase.symbol) ?? tradeBase;
   const [orderSymbol, setOrderSymbol] = useState(symbol.symbol);
   const [quantity, setQuantity] = useState("1");
-  const [limitPrice, setLimitPrice] = useState(symbol.price.replace(/,/g, ""));
+  const [limitPrice, setLimitPrice] = useState(plainPrice(symbol.price));
   const [confirmed, setConfirmed] = useState(false);
   const [livePhrase, setLivePhrase] = useState("");
   const [orderBusy, setOrderBusy] = useState(false);
@@ -953,10 +1343,11 @@ function TradeView({ symbol, orderSide, setOrderSide, linked, token, onTraded, r
   const validOrder = Number.isFinite(quantityValue) && quantityValue > 0 && Number.isFinite(estimatedValue) && estimatedValue > 0;
   const buyingPowerAfter = Math.max(0, buyingPower - (orderSide === "Buy" && validOrder ? estimatedValue : 0));
   const quotePrecision = tradeSymbol.group === "Forex" ? 5 : 2;
-  const quotePrice = Number(tradeSymbol.price.replace(/,/g, ""));
-  const spread = quotePrice * (tradeSymbol.group === "Forex" ? 0.0001 : 0.00007);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!limitPrice && tradeSymbol.hasQuote) setLimitPrice(plainPrice(tradeSymbol.price));
+  }, [limitPrice, tradeSymbol.hasQuote, tradeSymbol.price]);
   const formatCurrency = (value: number) => formatMoney(value, accountCurrency);
-  const formatQuote = (value: number) => value.toLocaleString("en-US", { minimumFractionDigits: quotePrecision, maximumFractionDigits: quotePrecision });
   const exposurePct = buyingPower > 0 ? ((validOrder ? estimatedValue : 0) / buyingPower * 100).toFixed(1) : "0.0";
 
   async function submitOrder() {
@@ -987,7 +1378,7 @@ function TradeView({ symbol, orderSide, setOrderSide, linked, token, onTraded, r
   }
 
   return (
-    <div className="secondary-view trade-view">
+    <div className="secondary-view trade-view" data-zuri-target="trade-ticket">
       <div className="trade-intro"><div><span className="small-label">ORDER TICKET</span><h2>Place an order</h2><p>{linked.data ? `${linked.data.broker_name} ${isLive ? "live" : "paper"} account · ${accountCurrency}` : "No broker linked"}</p></div>{linked.data && <span className={isLive ? "paper-tag live-tag" : "paper-tag"}>{isLive ? "LIVE · REAL MONEY" : "PAPER MODE"}</span>}</div>
       {!linked.data && <p className="auth-message">{linked.status === "loading" ? "Loading your broker account…" : linked.status === "none" ? "Link a broker in Settings → Broker to place orders." : linked.error}</p>}
 
@@ -1025,7 +1416,7 @@ function TradeView({ symbol, orderSide, setOrderSide, linked, token, onTraded, r
       <div className="trade-layout">
         <section className="content-card order-card">
           <div className="side-toggle"><button className={orderSide === "Buy" ? "buy active" : "buy"} onClick={() => setOrderSide("Buy")}>Buy / Long</button><button className={orderSide === "Sell" ? "sell active" : "sell"} onClick={() => setOrderSide("Sell")}>Sell / Short</button></div>
-          <label className="field-label">Symbol<input list="order-symbols" value={orderSymbol} maxLength={20} onChange={(event) => { const value = event.target.value.toUpperCase(); setOrderSymbol(value); const nextSymbol = initialInstruments.find((item) => item.symbol === value); if (nextSymbol) { setTradeSymbol(nextSymbol); setLimitPrice(nextSymbol.price.replace(/,/g, "")); } }} placeholder={linked.data?.broker === "oanda" ? "EUR_USD" : "AAPL"}/><datalist id="order-symbols">{initialInstruments.map((item) => <option key={item.symbol} value={item.symbol}>{item.name}</option>)}</datalist></label>
+          <label className="field-label">Symbol<input list="order-symbols" value={orderSymbol} maxLength={20} onChange={(event) => { const value = event.target.value.toUpperCase(); setOrderSymbol(value); const nextSymbol = initialInstruments.find((item) => item.symbol === value); if (nextSymbol) { setTradeSymbol(nextSymbol); setLimitPrice(plainPrice(nextSymbol.price)); } }} placeholder={linked.data?.broker === "oanda" ? "EUR_USD" : "AAPL"}/><datalist id="order-symbols">{initialInstruments.map((item) => <option key={item.symbol} value={item.symbol}>{item.name}</option>)}</datalist></label>
           <div className="field-row"><label className="field-label">Order type<select disabled><option>Market</option></select></label></div>
           <div className="field-row"><label className="field-label">Quantity<input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="decimal"/></label><label className="field-label">Reference price ({accountCurrency}, estimate only)<input value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal"/></label></div>
           <div className="field-row"><label className="field-label">Stop loss (optional)<input value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} inputMode="decimal" placeholder="Zuri can fill this"/></label><label className="field-label">Take profit (optional)<input value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} inputMode="decimal" placeholder="Zuri can fill this"/></label></div>
@@ -1037,9 +1428,9 @@ function TradeView({ symbol, orderSide, setOrderSide, linked, token, onTraded, r
           <button className={orderSide === "Buy" ? "submit-order buy-submit" : "submit-order sell-submit"} disabled={!validOrder || !linked.data || !confirmed || orderBusy || (isLive && livePhrase !== "CONFIRM LIVE")} onClick={() => void submitOrder()}>{orderBusy ? "Sending…" : `${orderSide} ${orderSymbol || "—"}`}</button><small className="disclaimer">{isLive ? "This sends a real order to your live broker account." : "Paper order only. No real funds will be used."}</small>
         </section>
         <section className="content-card trade-context">
-          <div className="section-title"><div><span className="small-label">MARKET SNAPSHOT · DEMO</span><h2>{tradeSymbol.symbol}</h2></div><span className={tradeSymbol.up ? "positive" : "negative"}>{tradeSymbol.change}</span></div>
-          <strong className="snapshot-price">{tradeSymbol.group === "Forex" ? "" : "$"}{tradeSymbol.price}</strong>
-          <div className="snapshot-row"><span>Bid</span><b>{formatQuote(Math.max(0, quotePrice - spread / 2))}</b><span>Ask</span><b>{formatQuote(quotePrice + spread / 2)}</b></div>
+          <div className="section-title"><div><span className="small-label">MARKET SNAPSHOT</span><h2>{tradeSymbol.symbol}</h2></div><span className={tradeSymbol.hasQuote ? (tradeSymbol.up ? "positive" : "negative") : "muted"}>{tradeSymbol.change}</span></div>
+          <strong className="snapshot-price">{tradeSymbol.hasQuote && tradeSymbol.group !== "Forex" ? "$" : ""}{tradeSymbol.price}</strong>
+          <div className="snapshot-row"><span>Day low</span><b>{tradeSymbol.low ?? "—"}</b><span>Day high</span><b>{tradeSymbol.high ?? "—"}</b></div>
           <div className="snapshot-row"><span>Notional</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Exposure</span><b>{exposurePct}%</b></div>
           <div className="trade-ai-note"><span className="ai-spark">✳</span><div><b>Zuri risk check</b><p>This order would use about {exposurePct}% of your reported buying power (using your reference price). Check your size and exit plan before submitting.</p></div></div>
         </section>
@@ -1063,14 +1454,19 @@ function SettingsView({
   preferences,
   onSavePreferences,
   linked,
+  request,
 }: {
   linked: LinkedAccountState;
+  request: { tab?: string; prefill?: WalkthroughStep["prefill"]; n: number } | null;
   userId: string;
   email: string;
   preferences: UserPreferences | null;
   onSavePreferences: (preferences: UserPreferences) => Promise<void>;
 }) {
-  const { deleteAccount, updateDisplayName, updateEmail } = useZuriAuth();
+  const { sendPasswordChangeEmail, deleteAccount, updateDisplayName, updateEmail } = useZuriAuth();
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordMessage, setPasswordMessage] = useState("");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("Account");
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileName, setProfileName] = useState("");
@@ -1106,6 +1502,17 @@ function SettingsView({
   const updatePreference = <K extends keyof UserPreferences>(key: K, value: UserPreferences[K]) => {
     setPreferencesDraft((current) => current ? { ...current, [key]: value } : current);
   };
+
+  // Zuri's guided walkthrough can switch tab and fill in values; the normal autosave then stores them.
+  useEffect(() => {
+    if (!request) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (request.tab && (tabs as string[]).includes(request.tab)) setSettingsTab(request.tab as SettingsTab);
+    const { max_trade_risk_percent: perTrade, max_daily_loss_percent: daily } = request.prefill ?? {};
+    if (typeof perTrade === "number") updatePreference("max_trade_risk_percent", perTrade);
+    if (typeof daily === "number") updatePreference("max_daily_loss_percent", daily);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.n]);
 
   const handleSaveAccountDetails = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1261,8 +1668,8 @@ function SettingsView({
         <div className="settings-section">
           <span className="small-label">RISK CONTROLS</span>
           <h3>Portfolio discipline</h3>
-          <div className="setting-row"><div><b>Max daily loss (%)</b><small>Hard stop across account</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_daily_loss_percent ?? 2} onChange={(event) => updatePreference("max_daily_loss_percent", Number(event.target.value))} /></div>
-          <div className="setting-row"><div><b>Max trade risk (%)</b><small>Per-trade position sizing cap</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_trade_risk_percent ?? 0.75} onChange={(event) => updatePreference("max_trade_risk_percent", Number(event.target.value))} /></div>
+          <div className="setting-row" data-zuri-target="risk-max-daily"><div><b>Max daily loss (%)</b><small>Hard stop across account</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_daily_loss_percent ?? 2} onChange={(event) => updatePreference("max_daily_loss_percent", Number(event.target.value))} /></div>
+          <div className="setting-row" data-zuri-target="risk-max-trade"><div><b>Max trade risk (%)</b><small>Per-trade position sizing cap</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_trade_risk_percent ?? 0.75} onChange={(event) => updatePreference("max_trade_risk_percent", Number(event.target.value))} /></div>
           <div className="setting-row"><div><b>Max correlation exposure (%)</b><small>Risk concentration limit</small></div><input type="number" min={0} max={100} step="0.01" value={preferencesDraft?.max_correlation_exposure_percent ?? 35} onChange={(event) => updatePreference("max_correlation_exposure_percent", Number(event.target.value))} /></div>
           <div className="setting-row"><div><b>Emergency close all</b><small>One-click panic liquidation</small></div><button className="danger-button" type="button">Close all</button></div>
         </div>
@@ -1315,6 +1722,24 @@ function SettingsView({
         <div className="settings-section">
           <span className="small-label">SECURITY</span>
           <h3>Access and protection</h3>
+          <div className="password-change">
+            <div><b>Change password</b><small>For your security, we email a link to <b>{email}</b>. Open it to choose a new password.</small></div>
+            {passwordError && <div className="auth-error" role="alert">{passwordError}</div>}
+            {passwordMessage && <div className="auth-message" role="status">{passwordMessage}</div>}
+            <button className="solid-button" type="button" disabled={passwordBusy} onClick={async () => {
+              setPasswordError("");
+              setPasswordMessage("");
+              setPasswordBusy(true);
+              try {
+                const sentTo = await sendPasswordChangeEmail();
+                setPasswordMessage(`We sent a password change link to ${sentTo}. Open it from your email to choose a new password.`);
+              } catch (sendError) {
+                setPasswordError(sendError instanceof Error ? sendError.message : "Unable to send the email. Please try again in a minute.");
+              } finally {
+                setPasswordBusy(false);
+              }
+            }}>{passwordBusy ? "Sending…" : "Email me a change link"}</button>
+          </div>
           <div className="setting-row"><div><b>Two-factor auth</b><small>Configure available sign-in methods in Supabase</small></div><input type="checkbox" disabled aria-label="Two-factor authentication is not available in this prototype" /></div>
           <div className="setting-row"><div><b>Session timeout</b><small>Session timeout controls are not available yet</small></div><select value="30 min" disabled aria-label="Session timeout is not available in this prototype"><option>10 min</option><option>30 min</option><option>1 hour</option><option>4 hours</option></select></div>
           <div className="setting-row"><div><b>Hide account values</b><small>Mask sensitive numbers</small></div><input type="checkbox" checked={preferencesDraft?.hide_account_values ?? false} onChange={(event) => updatePreference("hide_account_values", event.target.checked)} /></div>
@@ -1373,7 +1798,7 @@ function SettingsView({
       </div>
 
       <div className="settings-layout">
-        <nav className="settings-nav" aria-label="Settings sections">
+        <nav className="settings-nav" data-zuri-target="settings-tabs" aria-label="Settings sections">
           {tabs.map((tab) => (
             <button
               key={tab}
@@ -1386,7 +1811,7 @@ function SettingsView({
           ))}
         </nav>
 
-        <div className="content-card settings-card">
+        <div className="content-card settings-card" data-zuri-target="settings-panel">
           {tabContent[settingsTab]}
         </div>
       </div>

@@ -295,26 +295,9 @@ export async function loadWatchlist(userId: string) {
     .eq("user_id", userId)
     .order("position", { ascending: true });
   if (error) throw new Error(`Unable to load your watchlist: ${error.message}`);
-  let symbols = (data ?? []).map((item) => item.symbol as string);
+  const symbols = (data ?? []).map((item) => item.symbol as string);
+  // A brand-new account starts with an empty watchlist; nothing is seeded or carried over from a previous account in this browser.
   if (typeof window !== "undefined" && !window.localStorage.getItem(watchlistMigrationKey(userId))) {
-    const saved = window.localStorage.getItem(legacyWatchlistKey);
-    let legacySymbols: string[] = [];
-    if (saved) {
-      try {
-        const parsed: unknown = JSON.parse(saved);
-        if (!Array.isArray(parsed) || !parsed.every((symbol) => typeof symbol === "string")) {
-          throw new Error("invalid format");
-        }
-        legacySymbols = [...new Set((parsed as string[]).filter((symbol) => initialWatchlistSymbols.includes(symbol)))];
-      } catch {
-        throw new Error("Your saved browser watchlist could not be read. Its data was left unchanged.");
-      }
-    }
-    const nextSymbols = symbols.length > 0
-      ? [...new Set([...symbols, ...legacySymbols])]
-      : (legacySymbols.length > 0 ? legacySymbols : initialWatchlistSymbols);
-    await saveWatchlist(userId, nextSymbols);
-    symbols = nextSymbols;
     window.localStorage.removeItem(legacyWatchlistKey);
     window.localStorage.setItem(watchlistMigrationKey(userId), "true");
   }

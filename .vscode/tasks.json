@@ -4,7 +4,7 @@
 		{
 			"label": "Launch Zuri frontend",
 			"type": "shell",
-			"command": "npm",
+			"command": "npm.cmd",
 			"args": [
 				"run",
 				"dev",
@@ -20,7 +20,7 @@
 		{
 			"label": "Launch Zuri API",
 			"type": "shell",
-			"command": "backend\\venv\\Scripts\\python.exe",
+			"command": ".venv\\Scripts\\python.exe",
 			"args": [
 				"-m",
 				"uvicorn",

@@ -128,6 +128,9 @@ class AssistantChatTests(unittest.TestCase):
         snapshot_patcher = patch("backend.main.build_journey_snapshot", return_value={})
         snapshot_patcher.start()
         self.addCleanup(snapshot_patcher.stop)
+        memory_patcher = patch("backend.main.build_memory_context", return_value={"lifetime_profile": "not written yet"})
+        memory_patcher.start()
+        self.addCleanup(memory_patcher.stop)
 
     def tearDown(self):
         from backend.main import require_authenticated_user
@@ -184,7 +187,7 @@ class AssistantChatTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"reply": "Consider defining your risk first."})
+        self.assertEqual(response.json(), {"reply": "Consider defining your risk first.", "actions": []})
         call = get_client.return_value.chat.completions.create.call_args
         self.assertIn("symbol=BTCUSD", call.kwargs["messages"][0]["content"])
         self.assertIn("cannot execute trades", call.kwargs["messages"][0]["content"])

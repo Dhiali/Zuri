@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 const XAU_QUESTION = "What is happening with the XAUUSD?";
-const XAU_ANSWER = "XAUUSD is gold priced in US dollars. It tends to move opposite the dollar and with shifts in rate expectations, so watch yields and the dollar index alongside the chart. In this demo, price is holding above recent support. I can't predict the next move, but I can help you map key levels and size your risk.";
+const XAU_ANSWER = "XAUUSD is gold priced in US dollars. It tends to move opposite the dollar and with shifts in rate expectations, so watch yields and the dollar index alongside the chart. I can't predict the next move, but I can help you map key levels and size your risk.";
 
 function JargonVisual() {
   return (

@@ -22,6 +22,19 @@ export default function EmailVerifiedPage() {
       if (!data.session?.user.email_confirmed_at) {
         throw new Error("This verification link may have expired or already been used. Return to Zuri and sign in, or request a new confirmation email.");
       }
+      if (data.session.user.app_metadata.email_link_verified !== true) {
+        const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8000"}/api/user/confirm-email-link`, {
+          method: "POST",
+          headers: { Authorization: "Bearer " + data.session.access_token },
+        });
+        if (!response.ok) {
+          let detail = "";
+          try {
+            detail = ((await response.json()) as { detail?: string }).detail ?? "";
+          } catch {}
+          throw new Error(detail || "We couldn’t confirm your email. Please try again.");
+        }
+      }
     }).then(() => {
       if (!active) return;
       setState("confirmed");
@@ -51,7 +64,7 @@ export default function EmailVerifiedPage() {
             <span className="auth-card-kicker">EMAIL CONFIRMED</span>
             <h1>You’re all set.</h1>
             <p>Your email address has been verified. You can close this tab and return to the Zuri tab where you started. If the first tab doesn’t move to the next phase, refresh the page.</p>
-            <span className="email-verified-hint">Welcome to Zuri Markets · Educational demo workspace</span>
+            <span className="email-verified-hint">Welcome to Zuri Markets · Educational trading workspace</span>
           </>
         ) : (
           <>
