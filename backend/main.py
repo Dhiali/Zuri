@@ -2754,26 +2754,28 @@ def zuri_onboarding(request: OnboardingRequest, background_tasks: BackgroundTask
         if not latest_user.strip():
             raise HTTPException(status_code=422, detail="Say something first.")
         signal = zuri_agent.onboarding_signal(latest_user)
+        user_turns = [m.content for m in request.messages if m.role == "user"]
         prompt = (
             ZURI_PERSONA + ONBOARDING_GOAL
-            + "YOUR GOAL RIGHT NOW: listen. React to what they just told you like a mentor who is genuinely interested; when what they describe has a proper trading name (for example revenge trading, over-leverage, drawdown), name it and explain it in one short plain sentence. "
-            "Ask at most one follow-up question, and only if it would really help you tailor things. Do not move on to options yourself or promise to do anything; the app does that.\n"
-            'Reply with ONLY JSON: {"reply": string (max 3 short sentences), "status": "continue" | "unsure" | "done"}.\n'
-            "status: 'done' when they clearly said they have nothing more to add or want to start; 'continue' when they are clearly still sharing or you asked them a question they have not answered yet; "
-            "'unsure' when you cannot tell whether they want to say more or move on. If status is 'done', make the reply a short warm acknowledgement that does NOT ask a question.\n\n" + facts
+            + "YOUR GOAL RIGHT NOW: read exactly what the user just did and decide the single best next move. You are a mentor, not a mirror: never repeat or paraphrase what they said, never re-ask something already answered, and add something they did not have (name a concept and teach it in one plain sentence, kindly correct a risky expectation, or give one concrete insight). "
+            "If their goal is a lot of money, be honest and caring: nobody can promise that, most beginners lose at first, and traders who last protect their capital and learn before they scale; frame it as how you will help them get there safely.\n"
+            "FIRST work out what you already know about them (level, goal, markets of interest, time available, how much risk they are comfortable with, worries) and what is still missing. Then choose ONE 'next':\n"
+            "- 'advance': take action now and move them into getting set up. Choose this when they say they have nothing to add, say they want to start, say they do not know, or when you already know enough (level + goal + at least a market or a worry) to build a good roadmap. "
+            "Your reply is then a short warm reassurance that it is completely fine, that you will start setting everything up for them now and you will keep learning about them as you go. No question.\n"
+            "- 'ask': ask exactly ONE specific question about the most valuable thing still missing, because the answer would change how you tailor things. Never ask about something they have declined or said they do not know.\n"
+            "- 'reply': a short insight or reassurance with no question, when they shared something that needs acknowledging and the conversation can stay open for more.\n"
+            "- 'choices': you have given your insight and the user may or may not have more to say; the app then shows 'I want to say more' / 'We can move on' buttons. End your reply by saying you can carry on whenever they are ready.\n"
+            "Short or vague answers such as 'the money' or 'idk' are never a reason to probe again; take them as given and either advance or choose. Do not promise to do anything yourself in the chat; the app carries out the set-up.\n"
+            'Reply with ONLY JSON: {"known": {"level": bool, "goal": bool, "markets": bool, "time": bool, "risk": bool, "worries": bool}, "next": "advance" | "ask" | "reply" | "choices", "reply": string (max 3 short sentences)}.\n\n' + facts
         )
-        data = _ask_json(prompt, conversation)
+        data = _ask_json(prompt, conversation, 2000)
         reply = str(data.get("reply") or "").strip()
-        status = data.get("status") if data.get("status") in ("continue", "unsure", "done") else "unsure"
-        if signal == "done":
-            status = "done"
-            reply = reply or "Got it, thank you. That gives me a good picture."
-        elif signal == "more" and status == "done":
-            status = "continue"
+        move = zuri_agent.decide_onboarding_move(str(data.get("next") or ""), signal, user_turns, data.get("known") if isinstance(data.get("known"), dict) else {})
+        status = {"advance": "done", "ask": "continue", "reply": "continue", "choices": "unsure"}[move]
         if not reply:
-            reply = "Thank you, that helps me a lot. Is there anything else you want me to know?" if status != "done" else "Got it, thank you."
+            reply = {"done": "That's completely fine. Let's start setting things up and we'll build from there.", "unsure": "Thank you, that helps me a lot. I can carry on whenever you're ready.", "continue": "Thank you, that helps me a lot."}[status]
         background_tasks.add_task(remember_exchange, user["id"], "onboarding", "chat", "Dashboard", [("user", latest_user), ("assistant", reply)], snapshot)
-        return {"reply": reply[:700], "status": status}
+        return {"reply": reply[:700], "status": status, "next": move}
 
     said = [m.content for m in request.messages if m.role == "user"]
     prompt = (

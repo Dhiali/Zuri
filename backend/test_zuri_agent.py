@@ -342,6 +342,44 @@ class NextStepTests(unittest.TestCase):
         self.assertIn("CONVERSATION BEATS CHORES", prompt)
 
 
+class OnboardingChatTests(unittest.TestCase):
+    def test_move_decisions(self):
+        move = za.decide_onboarding_move
+        rich = {"level": True, "goal": True, "markets": True}
+        # "nothing to add" with a good picture: act, do not interrogate.
+        self.assertEqual(move("ask", "done", ["a", "nothing to add"], rich), "advance")
+        # they declined before: never ask again.
+        self.assertEqual(move("ask", "done", ["nothing", "no nothing really"], {}), "advance")
+        # she knows almost nothing and they have not declined before: one useful question is allowed.
+        self.assertEqual(move("ask", "done", ["nothing to add"], {}), "ask")
+        # the model chose to act or offer choices: respected.
+        self.assertEqual(move("advance", "done", ["x"], {}), "advance")
+        self.assertEqual(move("choices", None, ["x"], {}), "choices")
+        # a still-sharing user is never pushed to set-up.
+        self.assertEqual(move("advance", "more", ["a long story..."], rich), "ask")
+        # she stops questioning after enough turns, and garbage output falls back to choices.
+        self.assertEqual(move("ask", None, ["a", "b", "c", "d"], {}), "choices")
+        self.assertEqual(move("ask", None, ["a", "b", "c"], rich), "choices")
+        self.assertEqual(move("nonsense", None, ["a"], {}), "choices")
+
+    def _chat(self, user_turns, model_next):
+        from unittest import mock
+        from fastapi import BackgroundTasks
+        messages = [{"role": "assistant", "content": "Hi"}]
+        for i in range(user_turns):
+            messages += [{"role": "user", "content": f"answer {i}"}] + ([{"role": "assistant", "content": "ok"}] if i < user_turns - 1 else [])
+        request = main.OnboardingRequest(stage="chat", messages=messages)
+        with mock.patch.object(main, "build_journey_snapshot", return_value={}), \
+             mock.patch.object(main, "_ask_json", return_value={"reply": "Here is something new.", "next": model_next, "known": {}}):
+            return main.zuri_onboarding(request, BackgroundTasks(), {"id": "u"}, "")
+
+    def test_endpoint_maps_moves_to_statuses(self):
+        self.assertEqual(self._chat(1, "ask")["status"], "continue")
+        self.assertEqual(self._chat(3, "advance")["status"], "done")
+        self.assertEqual(self._chat(1, "choices")["status"], "unsure")
+        self.assertEqual(self._chat(4, "ask")["status"], "unsure")
+
+
 class TradeIdeaTests(unittest.TestCase):
     def test_affirmation_is_short_and_unmistakable(self):
         for text in ("yes", "Yes please", "ok do it", "go ahead", "line it up"):

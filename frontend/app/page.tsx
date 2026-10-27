@@ -620,7 +620,16 @@ function TradingWorkspace() {
         <a className="brand" href="#charts" onClick={() => setSection("Charts")} aria-label="Zuri home"><Image className="brand-logo" src="/zuri-logo.jpg" alt="" width={768} height={768} priority /><span>zuri<span className="brand-dot">.</span></span></a>
         <div className="top-divider" />
         <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">{linkedAccount.data ? `${linkedAccount.data.broker_name.toUpperCase()} · ${linkedAccount.data.environment === "live" ? "LIVE" : "PAPER"}` : "NO BROKER LINKED"}</span></div>
-        <div className="topbar-right"><button className={`icon-action zuri-top${journey?.phase === "intro" ? " is-away" : ""}`} title="Ask Zuri" aria-label="Ask Zuri" onClick={() => setAssistantOpen(true)}><ZuriMascot size={34} /></button><button className="icon-action notification" title="Notifications">♧<i /></button><span className="topbar-email">{session?.user.email}</span><button className="signout-button" onClick={async () => { try { await signOut(); } catch (signOutError) { setAccountError(signOutError instanceof Error ? signOutError.message : "Unable to sign out."); } }}>Sign out</button>{accountError && <span className="topbar-auth-error" role="alert">{accountError}</span>}</div>
+        <div className="topbar-right"><span className="zuri-anchor"><button className={`icon-action zuri-top${showOnboarding ? " is-away" : ""}${bubble && !showOnboarding ? " is-speaking" : ""}`} title="Ask Zuri" aria-label="Ask Zuri" onClick={() => setAssistantOpen(true)}><ZuriMascot size={34} /></button>{bubble && !showOnboarding && (
+          <div className="zuri-bubble" role="status" aria-label="Message from Zuri">
+            <p>{bubble}</p>
+            <div className="zuri-bubble-actions">
+              <button type="button" onClick={() => { setAssistantDraft(""); setAssistantOpen(true); dismissBubble(); }}>Reply to Zuri</button>
+              <button type="button" onClick={() => { dismissBubble(); setOnboardingForced(true); }}>Set me up</button>
+              <button type="button" className="muted" onClick={dismissBubble}>Not now</button>
+            </div>
+          </div>
+        )}</span><span className="topbar-email">{session?.user.email}</span><button className="signout-button" onClick={async () => { try { await signOut(); } catch (signOutError) { setAccountError(signOutError instanceof Error ? signOutError.message : "Unable to sign out."); } }}>Sign out</button>{accountError && <span className="topbar-auth-error" role="alert">{accountError}</span>}</div>
       </header>
       <div className={section === "Settings" ? "workspace settings-workspace" : "workspace"}>
         <nav className="primary-nav" aria-label="Primary navigation">
@@ -791,16 +800,6 @@ function TradingWorkspace() {
           onSkip={() => { setOnboardingForced(false); updateJourney({ ...journey, phase: "done", mode: "assistant", completed_steps: [...new Set([...journey.completed_steps, "guide:skipped"])] }); }}
         />
       )}
-      {bubble && !showOnboarding && (
-        <div className="zuri-bubble" role="status">
-          <p>{bubble}</p>
-          <div className="zuri-bubble-actions">
-            <button type="button" onClick={() => { setAssistantDraft(""); setAssistantOpen(true); dismissBubble(); }}>Reply to Zuri</button>
-            <button type="button" onClick={() => { dismissBubble(); setOnboardingForced(true); }}>Set me up</button>
-            <button type="button" className="muted" onClick={dismissBubble}>Not now</button>
-          </div>
-        </div>
-      )}
       {journey?.phase === "done" && !journey.completed_steps.includes("guide:skipped") && !journey.completed_steps.includes("guide:done") && (
         <ZuriGuide accessToken={session?.access_token ?? ""} section={section} journey={journey} onJourney={updateJourney} setSection={setSection} />
       )}
@@ -893,6 +892,7 @@ function AuraAssistant({
   const [error, setError] = useState("");
   const [pending, setPending] = useState<ZuriAction[]>([]);
   const [actionStatus, setActionStatus] = useState<Record<string, string>>({});
+  const [showSettings, setShowSettings] = useState(false);
   const sharing = useScreenShareActive();
   const topNudge = nudges[0] ?? null;
   const selectedNewsArticle = newsRequest?.article ?? null;
@@ -1023,24 +1023,29 @@ function AuraAssistant({
             <span className="aura-orb aura-orb-small" aria-hidden="true"><span>✦</span></span>
             <div className="aura-panel-title">
               <strong>Zuri <span>AI</span></strong>
-              <small>Your trading companion</small>
+              <small>{isSending ? "Thinking…" : "Your trading buddy"}</small>
             </div>
+            <button className={`aura-icon-btn${showSettings ? " active" : ""}`} type="button" aria-label="What Zuri can see and do" aria-expanded={showSettings} onClick={() => setShowSettings((value) => !value)}>⚙</button>
             <button className="aura-close" type="button" aria-label="Close Zuri AI" onClick={() => onOpenChange(false)}>×</button>
           </header>
           <div className="aura-context">
-            <span className="aura-context-dot" />
-            With you in <b>{section}</b><span>·</span><b>{symbol.symbol}</b><span>·</span>{timeframe}
+            <span className="aura-chip">{section}</span>
+            <span className="aura-chip">{symbol.symbol}</span>
+            <span className="aura-chip">{timeframe}</span>
+            <span className={`aura-chip ${access.see ? "on" : ""}`}>{access.see ? "Can see screen" : "Screen hidden"}</span>
           </div>
-          <div className="aura-access" aria-label="What Zuri may do">
-            <label><input type="checkbox" checked={access.see} onChange={(event) => onAccess({ see: event.target.checked })} /> See my workspace</label>
-            <label><input type="checkbox" checked={access.act} onChange={(event) => onAccess({ act: event.target.checked })} /> Act for me (I approve each step)</label>
-            {access.see && <button type="button" className="aura-share" onClick={() => void startScreenShare().catch((shareError: unknown) => setError(shareError instanceof Error ? shareError.message : "Screen sharing was cancelled."))} disabled={sharing}>{sharing ? "Seeing your screen" : "Show Zuri my screen"}</button>}
-            <label>How involved I am <select value={involvement} onChange={(event) => onInvolvement(event.target.value as Involvement)}>
-              <option value="side_by_side">Side-by-side buddy</option>
-              <option value="occasional">Occasional buddy</option>
-              <option value="on_demand">Need-to-know buddy</option>
-            </select></label>
-          </div>
+          {showSettings && (
+            <div className="aura-access" aria-label="What Zuri may do">
+              <label><input type="checkbox" checked={access.see} onChange={(event) => onAccess({ see: event.target.checked })} /> <span><b>See my workspace</b><small>Chart, positions and what you have open</small></span></label>
+              <label><input type="checkbox" checked={access.act} onChange={(event) => onAccess({ act: event.target.checked })} /> <span><b>Act for me</b><small>I approve every step first</small></span></label>
+              {access.see && <button type="button" className="aura-share" onClick={() => void startScreenShare().catch((shareError: unknown) => setError(shareError instanceof Error ? shareError.message : "Screen sharing was cancelled."))} disabled={sharing}>{sharing ? "Seeing your screen" : "Show Zuri my screen"}</button>}
+              <label className="aura-involve"><span><b>How involved I am</b></span><select value={involvement} onChange={(event) => onInvolvement(event.target.value as Involvement)}>
+                <option value="side_by_side">Side-by-side buddy</option>
+                <option value="occasional">Occasional buddy</option>
+                <option value="on_demand">Need-to-know buddy</option>
+              </select></label>
+            </div>
+          )}
           {selectedNewsArticle && (
             <div className="aura-news-context">
               <span>DISCUSSING NEWS · {selectedNewsArticle.source}</span>
@@ -1087,8 +1092,10 @@ function AuraAssistant({
           </div>
           {messages.length === 1 && (
             <div className="aura-suggestions">
-              <button type="button" onClick={() => void sendMessage("What should I consider when setting a stop loss?")}>Stop-loss basics</button>
-              <button type="button" onClick={() => void sendMessage(`Help me create a risk checklist for ${symbol.symbol}.`)}>Review my checklist</button>
+              <button type="button" onClick={() => void sendMessage(`Open the ${symbol.symbol} chart and walk me through what it shows.`)}><b>Read {symbol.symbol} with me</b><span>Chart analysis, step by step</span></button>
+              <button type="button" onClick={() => void sendMessage("What is the best next step for me right now?")}><b>What should I do next?</b><span>Based on where you are</span></button>
+              <button type="button" onClick={() => void sendMessage("Explain stop-loss and position size like I'm new to trading.")}><b>Learn risk basics</b><span>Stop-loss and position size</span></button>
+              <button type="button" onClick={() => void sendMessage(`Help me create a risk checklist for ${symbol.symbol}.`)}><b>Build a risk checklist</b><span>Before I place a trade</span></button>
             </div>
           )}
           <form className="aura-compose" onSubmit={(event) => { event.preventDefault(); void sendMessage(draft); }}>
@@ -1107,16 +1114,6 @@ function AuraAssistant({
           <p className="aura-disclaimer">{access.act ? "Zuri only acts after you approve · no trades are submitted" : "Educational support only · no trades are submitted"}</p>
         </section>
       )}
-      <button
-        className={`aura-launcher${isOpen ? " open" : ""}`}
-        type="button"
-        aria-label={isOpen ? "Close Zuri AI assistant" : "Open Zuri AI assistant"}
-        aria-expanded={isOpen}
-        onClick={() => onOpenChange(!isOpen)}
-      >
-        <span className="aura-orb" aria-hidden="true"><span>✦</span></span>
-        <span className="aura-launcher-label">{isOpen ? "Close" : "Ask Zuri"}</span>
-      </button>
     </div>
   );
 }

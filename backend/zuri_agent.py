@@ -68,6 +68,24 @@ def onboarding_signal(text: str) -> str | None:
     return None
 
 
+def decide_onboarding_move(model_next: str, signal: str | None, user_turns: list[str], known: dict) -> str:
+    """Turns the model's read of the user's last message into a move, with guards so she never nags or stalls.
+    Returns 'advance' (start setting them up), 'ask', 'reply' or 'choices'."""
+    move = model_next if model_next in ("advance", "ask", "reply", "choices") else "choices"
+    declined_before = sum(1 for turn in user_turns[:-1] if onboarding_signal(turn) == "done")
+    knows_enough = bool(known.get("level") or known.get("goal")) and sum(1 for key in ("level", "goal", "markets", "time", "risk", "worries") if known.get(key) is True) >= 3
+    if signal == "done":
+        # They said they have nothing to add: one useful question is fine only if she knows very little and they have not declined before.
+        return "advance" if (knows_enough or declined_before or move != "ask") else "ask"
+    if signal == "more" and move == "advance":
+        return "ask"
+    if move in ("ask", "reply") and len(user_turns) >= 4:
+        return "choices"
+    if move == "ask" and knows_enough and len(user_turns) >= 3:
+        return "choices"
+    return move
+
+
 def _tool(name: str, description: str, properties: dict | None = None, required: list[str] | None = None) -> dict:
     return {"type": "function", "function": {
         "name": name, "description": description,

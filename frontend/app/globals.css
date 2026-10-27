@@ -1227,3 +1227,47 @@ td b { font-weight: 580; }
 .chart-welcome-quote { text-align: right; }
 .chart-welcome-add { grid-column: 1 / -1; color: #b99aff; font-size: 10px; letter-spacing: .3px; }
 .chart-welcome-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 22px; padding-top: 16px; border-top: 1px solid #2a2832; color: #9ca4a2; font-size: 12px; }
+
+.zuri-anchor { position: relative; display: inline-flex; }
+.zuri-anchor .zuri-bubble { position: absolute; top: calc(100% + 12px); right: -20px; left: auto; width: 340px; max-width: 340px; z-index: 80; }
+.zuri-anchor .zuri-bubble::before { right: 33px; }
+.zuri-top.is-speaking .zuri-mascot { filter: drop-shadow(0 0 14px rgba(185, 149, 255, .85)); }
+
+/* Zuri docked side panel: full height, pushes the workspace instead of covering it */
+.terminal-shell:has(.aura-panel) .workspace { margin-right: 400px; transition: margin-right .22s ease; }
+.aura-panel { position: fixed; top: 58px; right: 0; bottom: 27px; width: 400px; height: auto; min-height: 0; border-radius: 0; border-width: 0 0 0 1px; box-shadow: -14px 0 40px #0007; animation: aura-dock .22s ease; }
+@keyframes aura-dock { from { transform: translateX(32px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (max-width: 900px) { .aura-panel { width: 100%; } .terminal-shell:has(.aura-panel) .workspace { margin-right: 0; } }
+.aura-panel-header { min-height: 62px; }
+.aura-panel-title strong { font-size: 15px; }
+.aura-panel-title small { font-size: 11px; }
+.aura-icon-btn { width: 32px; height: 32px; margin-left: auto; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #a5a0aa; cursor: pointer; font-size: 16px; }
+.aura-icon-btn:hover, .aura-icon-btn.active { border-color: #46404d; background: #ffffff0d; color: #f4efff; }
+.aura-icon-btn + .aura-close { margin-left: 0; }
+.aura-context { flex-wrap: wrap; gap: 6px; padding: 9px 16px; }
+.aura-chip { padding: 3px 9px; border: 1px solid #3a3641; border-radius: 999px; color: #b9b2c2; font-size: 11px; text-transform: capitalize; }
+.aura-chip.on { border-color: #6b57a0; color: #d8c4ff; background: #2a2236; }
+.aura-access { flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 16px; background: #17151b; font-size: 12px; }
+.aura-access label { align-items: flex-start; gap: 9px; }
+.aura-access label span { display: flex; flex-direction: column; gap: 2px; }
+.aura-access label b { color: #e3dcec; font-weight: 600; }
+.aura-access small { color: #8e8995; font-size: 11px; }
+.aura-access .aura-involve { flex-direction: column; gap: 6px; }
+.aura-access select { padding: 7px 9px; border: 1px solid #49434e; border-radius: 8px; background: #1c1c20; color: #e8e3ec; font-size: 12px; }
+.aura-share { margin-left: 0; padding: 8px 12px; font-size: 12px; text-align: center; }
+.aura-messages { gap: 18px; padding: 20px 18px 12px; }
+.aura-message { max-width: 100%; gap: 10px; }
+.aura-message-mark { width: 24px; height: 24px; flex-basis: 24px; font-size: 12px; margin-top: 1px; }
+.aura-message p { padding: 0; border: 0; background: transparent; font-size: 13.5px; line-height: 1.65; color: #e6e2ea; }
+.aura-message.user { max-width: 88%; }
+.aura-message.user p { padding: 10px 14px; border: 1px solid #594972; border-radius: 16px 16px 4px 16px; background: #30263b; }
+.aura-typing { font-size: 12px; }
+.aura-error { font-size: 12px; }
+.aura-suggestions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 4px 18px 14px; }
+.aura-suggestions button { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; padding: 12px; border-radius: 12px; text-align: left; font-size: 12px; }
+.aura-suggestions button b { color: #eadfff; font-weight: 600; }
+.aura-suggestions button span { color: #8e8995; font-size: 11px; }
+.aura-compose { margin: 0 14px; padding: 10px 10px 10px 14px; border-radius: 14px; }
+.aura-compose textarea { font-size: 13px; min-height: 40px; max-height: 140px; resize: none; }
+.aura-compose button { width: 34px; height: 34px; flex-basis: 34px; border-radius: 10px; }
+.aura-disclaimer { font-size: 10px; padding-bottom: 12px; }
