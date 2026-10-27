@@ -1201,7 +1201,7 @@ function MarketNewsSection({
     .slice(0, variant === "dashboard" ? 8 : 6);
 
   return (
-    <section className={`market-news-panel ${variant}`} aria-labelledby={`market-news-title-${variant}`}>
+    <section className={`market-news-panel ${variant}`} aria-labelledby={`market-news-title-${variant}`} data-zuri-target={`news-${variant}`}>
       <div className="market-news-heading">
         <div>
           <span className="small-label">ZURI MARKET INTELLIGENCE</span>
@@ -1288,7 +1288,7 @@ function Dashboard({
       </div>
       {checklist}
       <CoachingPanel token={token} refreshKey={refreshKey} onTags={setSuggestedTags} />
-      <CommunityPanel token={token} suggestedTags={suggestedTags} />
+      <div data-zuri-target="dash-community"><CommunityPanel token={token} suggestedTags={suggestedTags} /></div>
       <MarketNewsSection variant="dashboard" news={news} loading={loading} error={error} onRefresh={onRefresh} onAskAboutStory={onAskAboutStory} />
       {linked.status !== "ready" ? (
         <section className="content-card">

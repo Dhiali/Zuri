@@ -9,10 +9,13 @@ type Comparison = { groups: Record<string, GroupStats>; verdict: "reliable" | "p
 type Summary = { trades: number; win_rate_pct: number | null; total_pl: number };
 type Suggestion = { id: string; title: string; why: string; steps: string[]; topics: string[] };
 type Resource = { topic: string; title: string; provider: string; url: string };
+type Course = { title: string; provider: string; url: string; kind: string; why?: string };
+type Learning = { courses: Course[]; videos: Course[]; based_on: { markets: string[]; experience: string | null } };
 type Coaching =
-  | { status: "no_broker" | "unsupported" }
+  | { status: "no_broker" | "unsupported"; learning?: Learning }
   | {
       status: "ok";
+      learning?: Learning;
       trades_analyzed: number;
       weekly: { this_week: Summary; last_week: Summary; daily_last7: { date: string; weekday: string; trades: number; pl: number }[]; weekday: Comparison; session: Comparison };
       profile: { style: string | null; win_rate_pct: number | null; payoff_ratio: number | null; profit_factor: number | null; expectancy: number | null; avg_win: number | null; avg_loss: number | null; max_consecutive_losses: number; top_symbol: string | null; top_symbol_share_pct: number | null; long_share_pct: number | null; trades: number };
@@ -47,6 +50,21 @@ function DayBars({ days }: { days: { weekday: string; trades: number; pl: number
   );
 }
 
+function LearningSection({ learning }: { learning?: Learning }) {
+  if (!learning || (!learning.courses.length && !learning.videos.length)) return null;
+  const { markets, experience } = learning.based_on;
+  const basis = [experience, markets.length ? markets.join(", ") : null].filter(Boolean).join(" · ");
+  return (
+    <section className="content-card coach-card" data-zuri-target="dash-learn">
+      <div className="section-title"><div><span className="small-label">LEARN · CHOSEN FOR YOU{basis ? ` · ${basis.toUpperCase()}` : ""}</span><h2>Strategy videos and free courses</h2></div></div>
+      <ul className="resource-list">
+        {learning.courses.map((c) => <li key={c.url}><a href={c.url} target="_blank" rel="noopener noreferrer">{c.title}</a><small>{c.provider} · free course{c.why ? ` · ${c.why}` : ""} · opens in a new tab</small></li>)}
+        {learning.videos.map((v) => <li key={v.url}><a href={v.url} target="_blank" rel="noopener noreferrer">{v.title}</a><small>YouTube videos · opens in a new tab</small></li>)}
+      </ul>
+    </section>
+  );
+}
+
 export function CoachingPanel({ token, refreshKey, onTags }: { token: string; refreshKey: number; onTags?: (tags: string[]) => void }) {
   const [data, setData] = useState<Coaching | null>(null);
   const [error, setError] = useState("");
@@ -73,13 +91,15 @@ export function CoachingPanel({ token, refreshKey, onTags }: { token: string; re
 
   if (error) return <section className="content-card"><p className="auth-message" role="alert">{error}</p></section>;
   if (!data) return <section className="content-card"><p className="auth-message">Zuri is reviewing your trades…</p></section>;
-  if (data.status !== "ok") return <section className="content-card coach-card"><span className="small-label">ZURI COACHING</span><h2>Your weekly breakdown and strategy review</h2><p className="muted">{data.status === "no_broker" ? "Link a broker in Settings to unlock personalised coaching from your real trades." : "Coaching is not available for this broker yet."}</p></section>;
+  if (data.status !== "ok") return <>
+    <section className="content-card coach-card" data-zuri-target="dash-weekly"><span className="small-label">ZURI COACHING</span><h2>Your weekly breakdown and strategy review</h2><p className="muted">{data.status === "no_broker" ? "Link a broker in Settings to unlock your weekly activity breakdown and personalised insights from your real trades." : "Coaching is not available for this broker yet."}</p></section>
+    <LearningSection learning={data.learning} />
+  </>;
 
   const { weekly, profile } = data;
-  const resources = data.resources;
   return (
     <>
-      <section className="content-card coach-card">
+      <section className="content-card coach-card" data-zuri-target="dash-weekly">
         <div className="section-title"><div><span className="small-label">YOUR WEEK · {data.trades_analyzed} CLOSED TRADES ANALYSED</span><h2>Weekly breakdown</h2></div></div>
         {data.trades_analyzed === 0 ? <p className="muted">No closed trades yet. Once you complete a trade, Zuri starts finding your patterns.</p> : <>
           <div className="stat-grid coach-stats">
@@ -109,11 +129,8 @@ export function CoachingPanel({ token, refreshKey, onTags }: { token: string; re
             </article>
           ))}
         </div>
-        <div className="section-title"><div><span className="small-label">LEARN MORE</span><h3>Videos, articles and courses</h3></div></div>
-        <ul className="resource-list">
-          {resources.map((r) => <li key={r.url}><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title}</a><small>{r.provider} search · opens in a new tab</small></li>)}
-        </ul>
       </section>
+      <LearningSection learning={data.learning} />
     </>
   );
 }

@@ -199,6 +199,52 @@ def resources_for(topics: list[str]) -> list[dict[str, str]]:
     return items
 
 
+def _course(title: str, provider: str, url: str, kind: str, why: str) -> dict[str, str]:
+    return {"title": title, "provider": provider, "url": url, "kind": kind, "why": why}
+
+
+# Hand-picked free courses (top-level pages that stay stable), keyed by what we know about the user.
+FREE_COURSES = {
+    "foundations": [
+        _course("School of Pipsology: free trading course", "BabyPips", "https://www.babypips.com/learn/forex", "Course", "A complete free course that starts from zero."),
+        _course("Stocks and bonds", "Khan Academy", "https://www.khanacademy.org/economics-finance-domain/core-finance/stock-and-bonds", "Course", "Plain-language lessons on how markets work."),
+    ],
+    "Forex": [_course("Forex trading basics and strategies", "BabyPips", "https://www.babypips.com/learn/forex", "Course", "Built around currency pairs.")],
+    "Stocks": [_course("Trading and investing learning center", "Fidelity", "https://www.fidelity.com/learning-center/trading-investing", "Course", "Free articles and videos on stocks and options.")],
+    "Crypto": [
+        _course("Binance Academy", "Binance", "https://academy.binance.com/en", "Course", "Free crypto trading and security guides."),
+        _course("Coinbase Learn", "Coinbase", "https://www.coinbase.com/learn", "Course", "Beginner crypto lessons."),
+    ],
+    "Commodities": [_course("CME Group education", "CME Group", "https://www.cmegroup.com/education.html", "Course", "Free courses on futures, gold and energy markets.")],
+    "tradingview": [_course("TradingView education", "TradingView", "https://www.tradingview.com/education/", "Videos", "Chart reading and strategy ideas from other traders.")],
+}
+
+EXPERIENCE_TOPICS = {
+    "New to trading": ["risk_management", "price_action", "journaling"],
+    "Learning the basics": ["trend_following", "position_sizing", "psychology"],
+    "Experienced": ["mean_reversion", "reward_risk", "psychology"],
+}
+MARKET_TOPICS = {"Forex": "swing", "Stocks": "day_trading", "Crypto": "breakout", "Commodities": "trend_following"}
+
+
+def learning_for(markets: list[str], experience: str | None, topics: list[str] | None = None) -> dict[str, Any]:
+    """Free courses plus strategy videos chosen from the user's markets, experience and (if known) trading-history topics."""
+    chosen = list(dict.fromkeys([*(topics or []), *EXPERIENCE_TOPICS.get(experience or "", EXPERIENCE_TOPICS["New to trading"]), *(MARKET_TOPICS[m] for m in markets if m in MARKET_TOPICS)]))[:6]
+    courses: list[dict[str, str]] = []
+    if experience in (None, "New to trading", "Learning the basics"):
+        courses += FREE_COURSES["foundations"]
+    for market in markets:
+        courses += FREE_COURSES.get(market, [])
+    courses += FREE_COURSES["tradingview"]
+    seen: set[str] = set()
+    courses = [c for c in courses if not (c["url"] in seen or seen.add(c["url"]))]
+    videos = [
+        {"topic": t, "title": TOPIC_QUERIES[t].capitalize(), "provider": "YouTube", "url": _search("YouTube", TOPIC_QUERIES[t]), "kind": "Videos"}
+        for t in chosen if t in TOPIC_QUERIES
+    ]
+    return {"courses": courses[:6], "videos": videos, "based_on": {"markets": markets, "experience": experience}}
+
+
 NEXT_STRATEGY = {
     "Scalping": ("Opening range breakout", "Day trading", "breakout"),
     "Day trading": ("Trend-following pullbacks", "Swing trading", "trend_following"),

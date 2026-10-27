@@ -319,6 +319,14 @@ def _step(section: str, target: str, title: str, body: str, **extra) -> dict:
     return {"section": section, "target": target, "title": title, "body": body, **extra}
 
 
+def _broker_steps() -> list[dict]:
+    return [
+        _step("Settings", "nav-Settings", "Open Settings", "Broker connections live in Settings.", settings_tab="Broker"),
+        _step("Settings", "settings-panel", "Open a free practice account", "Practice (paper) accounts trade with pretend money, so nothing real is at risk. Create one free with your broker, then generate API keys for it."),
+        _step("Settings", "settings-panel", "Connect your account", "Choose a broker, paste the Key ID and Secret (trading permissions only, never withdrawals), and start with a paper account."),
+    ]
+
+
 def build_walkthrough(goal: str, params: dict, available: list[str]) -> dict | None:
     """A guided, spotlight-by-spotlight tour. Every target is a data-zuri-target in the frontend."""
     symbol = normalize_symbol(params.get("symbol"), available) if params.get("symbol") else None
@@ -389,7 +397,10 @@ def build_walkthrough(goal: str, params: dict, available: list[str]) -> dict | N
         detailed = params.get("detail") == "detailed"
         steps = [
             _step("Dashboard", "nav-Dashboard", "Your dashboard", "Home base: your account, open positions, today's news and your next steps with me."),
-            _step("Charts", "nav-Charts", "Charts", "This is where you read the market. Pick a symbol on the right and a timeframe on top."),
+            _step("Dashboard", "dash-weekly", "Your weekly breakdown", "Your week at a glance: trades, wins, profit and loss by day, with Zuri's insights on what is working and what to try next. It fills in once a broker is linked and you've closed trades."),
+            _step("Dashboard", "dash-learn", "Videos and free courses", "Strategy videos and free courses picked from your experience level, your markets and your trading history."),
+            _step("Dashboard", "dash-community", "Community", "Opt in with a nickname to meet traders who use the same strategies, share ideas and reply to posts. Leave any time and your posts are deleted."),
+            _step("Charts", "nav-Charts", "Charts", "Read the market here: pick a symbol and timeframe, then use the news, AI scanners and backtests with saved history below the chart."),
             _step("Trade", "nav-Trade", "Trade", "Orders are placed here. Everything asks you to confirm first, and live-money orders need an extra safety phrase."),
             _step("Journal", "nav-Journal", "Journal", "Write why you take a trade. Reviewing it later is the fastest way to improve."),
             _step("Settings", "nav-Settings", "Settings", "Your broker link, risk limits and how involved I am all live here.", settings_tab="Broker"),
@@ -397,25 +408,30 @@ def build_walkthrough(goal: str, params: dict, available: list[str]) -> dict | N
         if detailed:
             steps = [
                 steps[0],
+                steps[1],
+                steps[2],
+                steps[3],
                 _step("Charts", "nav-Charts", "Charts", "This is where you read the market."),
                 _step("Charts", "chart-timeframes", "Timeframes", "Short timeframes (1m-15m) show noise and fast moves; 1h-1D show the bigger structure. Choose what matches how long you want to hold."),
                 _step("Charts", "chart-panel", "The chart and price", "The headline price and its daily change sit here. Learn to read trend, support and resistance before anything else."),
                 _step("Charts", "journal-actions", "Plans and notes", "Use Note, Long plan or Short plan to record entry, stop and target before you act."),
                 _step("Charts", "quotes-rail", "Your watchlist", "Everything you follow lives in this rail. Search to add more."),
-                steps[2],
+                _step("Charts", "news-charts", "News for this symbol", "Headlines relevant to the symbol on your chart. Ask me about a story, or send it to the backtest as event context."),
+                _step("Charts", "chart-scanners", "AI scanners", "Describe a condition in plain words, review the rule I draft, then activate it. Scanners are saved in this browser and check broker candles every minute while Zuri is open."),
+                _step("Charts", "chart-backtest", "Backtest a setup", "Replay a breakout, moving-average cross or RSI rule over real broker candles for a date range, with average return and the share of positive outcomes."),
+                _step("Charts", "chart-backtest-history", "Backtest history", "Every run is saved here. View the signals, run a setup again with its settings, or delete runs you don't need."),
+                steps[5],
                 _step("Trade", "trade-ticket", "The order ticket", "Choose a side, size the order so a stop-out stays within your risk limit, and always set a stop and a target."),
-                steps[3],
-                _step("Settings", "nav-Settings", "Settings", "Broker connection, risk limits and account details.", settings_tab="Risk"),
+                steps[6],
+                *_broker_steps(),
+                _step("Settings", "settings-tabs", "Risk limits", "Next, the Risk tab: these limits protect your account.", settings_tab="Risk"),
                 _step("Settings", "risk-max-trade", "Max trade risk", "This caps how much of your account one trade may lose. 1-2% or less is a common guideline."),
                 _step("Settings", "risk-max-daily", "Max daily loss", "Your stop-for-the-day line. Hitting it means you stop trading until tomorrow."),
             ]
-        return {"id": goal, "title": "A tour of Zuri" if detailed else "A quick look around", "steps": steps}
+        return {"id": goal, "title": "Your full Zuri tour, including broker setup" if detailed else "A quick look around", "steps": steps}
 
     if goal == "link_broker":
-        return {"id": goal, "title": "Link your broker", "steps": [
-            _step("Settings", "nav-Settings", "Open Settings", "Broker connections live in Settings.", settings_tab="Broker"),
-            _step("Settings", "settings-panel", "Connect your account", "Choose a broker, paste the Key ID and Secret (trading permissions only, never withdrawals), and start with a paper account."),
-        ]}
+        return {"id": goal, "title": "Link your broker", "steps": _broker_steps()}
     return None
 
 

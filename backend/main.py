@@ -2007,8 +2007,14 @@ def _coaching_bundle(user_id: str, tz_offset_minutes: int) -> dict:
 
 
 @app.get("/api/dashboard/coaching")
-def dashboard_coaching(tz_offset_minutes: int = Query(default=0, ge=-840, le=840), user: dict = Depends(require_authenticated_user)):
-    return _coaching_bundle(user["id"], tz_offset_minutes)
+def dashboard_coaching(tz_offset_minutes: int = Query(default=0, ge=-840, le=840), user: dict = Depends(require_authenticated_user), authorization: str | None = Header(default=None)):
+    bundle = _coaching_bundle(user["id"], tz_offset_minutes)
+    try:
+        markets, experience = get_user_profile_traits(user["id"], authorization or "")
+    except HTTPException:
+        markets, experience = [], None
+    topics = list(dict.fromkeys(t for item in bundle.get("suggestions", []) for t in item["topics"]))
+    return {**bundle, "learning": coaching.learning_for(markets, experience, topics)}
 
 
 class CoachNoteRequest(BaseModel):
@@ -2728,7 +2734,7 @@ class OnboardingRequest(BaseModel):
 
 
 class OnboardingPreferences(BaseModel):
-    tour: Literal["none", "quick", "detailed", "broker"]
+    tour: Literal["none", "quick", "detailed"]
     involvement: Literal["side_by_side", "occasional", "on_demand"]
     see_screen: bool
     act_on_screen: bool
@@ -2883,7 +2889,7 @@ def _infer_market_levels(user_id: str, authorization: str, said: list[str], fact
 @app.post("/api/zuri/onboarding/preferences")
 def zuri_onboarding_preferences(request: OnboardingPreferences, user: dict = Depends(require_authenticated_user)):
     """How the user wants Zuri to work with them becomes permanent memory she reads in every conversation."""
-    tour_text = {"none": "wants to explore the site on their own", "quick": "chose a quick walkthrough of the site", "detailed": "chose a detailed walkthrough of the site", "broker": "chose to start by opening and linking a free practice broker account with Zuri guiding them"}[request.tour]
+    tour_text = {"none": "wants to explore the site on their own", "quick": "chose a quick walkthrough of the site", "detailed": "chose a full walkthrough of the site, including opening and linking a free practice broker account, with Zuri guiding them"}[request.tour]
     new_facts = [
         {"fact": f"The user {tour_text}.", "category": "preference", "importance": 4},
         {"fact": f"Involvement they chose: {zuri_agent.INVOLVEMENT_LEVELS[request.involvement]}", "category": "preference", "importance": 5},
@@ -2899,10 +2905,7 @@ def zuri_onboarding_preferences(request: OnboardingPreferences, user: dict = Dep
             "category": "personal_context", "importance": 5,
         })
         store_zuri_facts(user["id"], new_facts[-1:])
-    if request.tour == "broker":
-        tour = zuri_agent.build_walkthrough("link_broker", {}, [])
-    else:
-        tour = zuri_agent.build_walkthrough("site_tour", {"detail": request.tour}, []) if request.tour != "none" else None
+    tour = zuri_agent.build_walkthrough("site_tour", {"detail": request.tour}, []) if request.tour != "none" else None
     return {"ok": True, "walkthrough": tour, "layout": layout}
 
 

@@ -832,6 +832,20 @@ class CoachingTests(unittest.TestCase):
         self.assertEqual([a["id"] for a in advice], ["build-sample"])
         self.assertTrue(all(r["url"].startswith("https://") for r in coaching.resources_for(advice[0]["topics"])))
 
+    def test_learning_is_personalised_by_markets_and_experience(self):
+        from backend import coaching
+
+        newbie = coaching.learning_for(["Crypto"], "New to trading")
+        urls = [c["url"] for c in newbie["courses"]]
+        self.assertIn("https://www.babypips.com/learn/forex", urls)
+        self.assertIn("https://academy.binance.com/en", urls)
+        self.assertEqual(len(urls), len(set(urls)))
+        pro = coaching.learning_for(["Forex"], "Experienced", ["psychology"])
+        self.assertNotIn("https://www.khanacademy.org/economics-finance-domain/core-finance/stock-and-bonds", [c["url"] for c in pro["courses"]])
+        self.assertEqual(pro["videos"][0]["topic"], "psychology")
+        self.assertTrue(all(v["url"].startswith("https://www.youtube.com/") for v in pro["videos"]))
+        self.assertTrue(coaching.learning_for([], None)["courses"])
+
 
 class CommunityTests(unittest.TestCase):
     def setUp(self):

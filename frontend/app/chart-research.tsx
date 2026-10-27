@@ -39,6 +39,36 @@ type BacktestResult = {
   winRate: number;
 };
 
+type BacktestRun = {
+  id: string;
+  ranAt: string;
+  symbol: string;
+  timeframe: string;
+  startDate: string;
+  endDate: string;
+  label: string;
+  rule: ScannerRule;
+  holdBars: number;
+  result: BacktestResult;
+};
+
+const MAX_SAVED_RUNS = 20;
+const MAX_SCANNERS = 5;
+
+function readStored<T>(key: string): T[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(key) ?? "[]");
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStored(key: string, items: unknown[]) {
+  try { window.localStorage.setItem(key, JSON.stringify(items)); } catch { /* storage full or unavailable: keep working in memory */ }
+}
+
 const historyLookbackDays: Record<string, number> = {
   "1m": 2,
   "5m": 5,
@@ -194,9 +224,9 @@ export function ChartResearch({
 }) {
   const [scannerPrompt, setScannerPrompt] = useState("");
   const [scannerDraft, setScannerDraft] = useState<ScannerRule | null>(null);
-  const [scannerState, setScannerState] = useState(() => ({ owner: userId, items: [] as Scanner[] }));
+  const [scannerState, setScannerState] = useState(() => ({ owner: userId, items: readStored<Scanner>(`zuri.scanners.${userId}`) }));
   const scanners = useMemo(
-    () => scannerState.owner === userId ? scannerState.items : [],
+    () => scannerState.owner === userId ? scannerState.items : readStored<Scanner>(`zuri.scanners.${userId}`),
     [scannerState, userId],
   );
   const scannersRef = useRef(scanners);
@@ -224,14 +254,48 @@ export function ChartResearch({
   const [backtestBusy, setBacktestBusy] = useState(false);
   const [backtestError, setBacktestError] = useState("");
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+  const [runsState, setRunsState] = useState(() => ({ owner: userId, items: readStored<BacktestRun>(`zuri.backtests.${userId}`) }));
+  const runs = useMemo(
+    () => runsState.owner === userId ? runsState.items : readStored<BacktestRun>(`zuri.backtests.${userId}`),
+    [runsState, userId],
+  );
+  const [viewedRun, setViewedRun] = useState<BacktestRun | null>(null);
 
   useEffect(() => {
     scannersRef.current = scanners;
-  }, [scanners]);
+    writeStored(`zuri.scanners.${userId}`, scanners);
+  }, [scanners, userId]);
+
+  const saveRun = (run: BacktestRun) => {
+    const next = [run, ...runs].slice(0, MAX_SAVED_RUNS);
+    setRunsState({ owner: userId, items: next });
+    writeStored(`zuri.backtests.${userId}`, next);
+  };
+  const removeRun = (id: string) => {
+    const next = runs.filter((run) => run.id !== id);
+    setRunsState({ owner: userId, items: next });
+    writeStored(`zuri.backtests.${userId}`, next);
+    if (viewedRun?.id === id) setViewedRun(null);
+  };
+  const clearRuns = () => {
+    setRunsState({ owner: userId, items: [] });
+    writeStored(`zuri.backtests.${userId}`, []);
+    setViewedRun(null);
+  };
+  const reuseRun = (run: BacktestRun) => {
+    setResearchSymbol(run.symbol);
+    setStartDate(run.startDate);
+    setEndDate(run.endDate);
+    setRule(run.rule);
+    setHoldBars(run.holdBars);
+    setEventLabel(run.label);
+    onClearEventContext();
+    document.getElementById("backtest-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const updateScanners = useCallback((update: Scanner[] | ((current: Scanner[]) => Scanner[])) => {
     setScannerState((current) => {
-      const currentItems = current.owner === userId ? current.items : [];
+      const currentItems = current.owner === userId ? current.items : readStored<Scanner>(`zuri.scanners.${userId}`);
       return { owner: userId, items: typeof update === "function" ? update(currentItems) : update };
     });
   }, [userId]);
@@ -324,8 +388,8 @@ export function ChartResearch({
 
   const activateScanner = () => {
     if (!scannerDraft) return;
-    if (scannersRef.current.length >= 5) {
-      setScannerError("You can keep up to five scanner setups in this browser session. Remove one before adding another.");
+    if (scannersRef.current.length >= MAX_SCANNERS) {
+      setScannerError("You can keep up to five scanners. Remove one before adding another.");
       return;
     }
     const scanner: Scanner = {
@@ -375,7 +439,7 @@ export function ChartResearch({
         ? completed.reduce((total, signal) => total + (signal.returnPct ?? 0), 0) / completed.length
         : 0;
       const wins = completed.filter((signal) => (signal.returnPct ?? 0) > 0).length;
-      setBacktestResult({
+      const result: BacktestResult = {
         broker: history.broker,
         bars: bars.length,
         truncated: history.truncated,
@@ -384,6 +448,20 @@ export function ChartResearch({
         signals: completed.slice(-30).reverse(),
         averageReturn,
         winRate: completed.length ? (wins / completed.length) * 100 : 0,
+      };
+      setBacktestResult(result);
+      setViewedRun(null);
+      saveRun({
+        id: crypto.randomUUID(),
+        ranAt: new Date().toISOString(),
+        symbol: selectedSymbol,
+        timeframe,
+        startDate,
+        endDate,
+        label: selectedEventLabel.trim(),
+        rule: configuredRule,
+        holdBars,
+        result,
       });
     } catch (error) {
       setBacktestError(error instanceof Error ? error.message : "Unable to load historical broker data.");
@@ -401,7 +479,7 @@ export function ChartResearch({
     <div className={visible ? "chart-research" : "chart-research dormant"}>
       {scannerAlert && !visible && <div className="scanner-toast" role="status"><span>✦ Scanner alert · {scannerAlert}</span><button type="button" aria-label="Dismiss scanner alert" onClick={() => setScannerAlert("")}>×</button></div>}
       <div hidden={!visible}>
-      <section className="content-card scanner-card" aria-labelledby="scanner-title">
+      <section className="content-card scanner-card" aria-labelledby="scanner-title" data-zuri-target="chart-scanners">
         <div className="chart-research-heading">
           <div><span className="small-label">AI SCANNERS · RUN WHILE ZURI IS OPEN</span><h2 id="scanner-title">Build a scanner with Zuri</h2><p>Describe a technical condition. Review the rule before activating it; scanners only monitor broker candles while this app is open.</p></div>
           <span className="chart-research-icon" aria-hidden="true">⌕</span>
@@ -421,7 +499,7 @@ export function ChartResearch({
             <button className="outline-button" type="button" disabled={scanners.length >= 5} onClick={activateScanner}>Activate scanner</button>
           </div>
         )}
-        {scanners.length > 0 && <div className="active-scanners"><div className="section-title"><div><span className="small-label">ACTIVE IN THIS BROWSER SESSION</span><h3>Scanners</h3></div><span className="muted">{scanners.filter((scanner) => scanner.active).length} / 5 active</span></div>
+        {scanners.length > 0 && <div className="active-scanners"><div className="section-title"><div><span className="small-label">SAVED IN THIS BROWSER · CHECKED WHILE ZURI IS OPEN</span><h3>Scanners</h3></div><span className="muted">{scanners.filter((scanner) => scanner.active).length} / 5 active</span></div>
           {scanners.map((scanner) => <div className="active-scanner" key={scanner.id}>
             <div><b>{scanner.name}</b><span>{scanner.symbol} · {scanner.timeframe} · {scanner.condition.replaceAll("_", " ")}</span>{scanner.lastAlert && <small className="scanner-alert">Latest signal · {scanner.lastAlert}</small>}<small className={scanner.status === "Monitoring" ? "scanner-status" : "scanner-status warning"}>{scanner.active ? scanner.status : "Paused"}</small></div>
             <div><button className="text-action" type="button" onClick={() => updateScanners((current) => current.map((item) => item.id === scanner.id ? { ...item, active: !item.active, status: item.active ? "Paused" : "Starting" } : item))}>{scanner.active ? "Pause" : "Resume"}</button><button className="text-action" type="button" onClick={() => updateScanners((current) => current.filter((item) => item.id !== scanner.id))}>Remove</button></div>
@@ -429,7 +507,7 @@ export function ChartResearch({
         </div>}
       </section>
 
-      <section className="content-card backtest-card" aria-labelledby="backtest-title">
+      <section className="content-card backtest-card" aria-labelledby="backtest-title" data-zuri-target="chart-backtest">
         <div className="chart-research-heading">
           <div><span className="small-label">BROKER CANDLES · HISTORICAL SIGNAL REVIEW</span><h2 id="backtest-title">Backtest a setup or event</h2><p>Use actual candles from your connected broker for this pair and date range.</p></div>
           <span className="chart-research-icon" aria-hidden="true">↶</span>
@@ -461,6 +539,23 @@ export function ChartResearch({
           {backtestResult.signalCount === 0 && <p className="muted">No completed signals matched this rule in the selected history.</p>}
         </div>}
         <p className="backtest-disclaimer">Historical signals are not a simulation of fills and exclude fees, slippage, spreads, and event-time matching. Past results do not predict future performance or guarantee profit.</p>
+      </section>
+
+      <section className="content-card backtest-card" aria-labelledby="backtest-history-title" data-zuri-target="chart-backtest-history">
+        <div className="section-title"><div><span className="small-label">SAVED IN THIS BROWSER · LAST {MAX_SAVED_RUNS} RUNS</span><h2 id="backtest-history-title">Backtest history</h2></div>{runs.length > 0 && <button className="text-action" type="button" onClick={() => { if (window.confirm("Delete all saved backtest runs?")) clearRuns(); }}>Clear all</button>}</div>
+        {runs.length === 0 ? <p className="muted">Every historical review you run is saved here so you can compare setups later.</p> : <div className="table-scroll"><table><thead><tr><th>Run</th><th>Setup</th><th>Range</th><th>Signals</th><th>Avg return</th><th>Positive</th><th /></tr></thead><tbody>{runs.map((run) => <tr key={run.id}>
+          <td>{formatDateTime(run.ranAt)}</td>
+          <td>{run.symbol} · {run.timeframe} · {run.rule.condition.replaceAll("_", " ")} {run.rule.direction}{run.label ? ` · ${run.label}` : ""}</td>
+          <td>{run.startDate} → {run.endDate}</td>
+          <td>{run.result.signalCount}</td>
+          <td className={run.result.averageReturn >= 0 ? "positive" : "negative"}>{run.result.averageReturn >= 0 ? "+" : ""}{run.result.averageReturn.toFixed(2)}%</td>
+          <td>{run.result.winRate.toFixed(1)}%</td>
+          <td><button className="text-action" type="button" onClick={() => setViewedRun(viewedRun?.id === run.id ? null : run)}>{viewedRun?.id === run.id ? "Hide" : "View"}</button> <button className="text-action" type="button" onClick={() => reuseRun(run)}>Run again</button> <button className="text-action" type="button" onClick={() => removeRun(run.id)}>Delete</button></td>
+        </tr>)}</tbody></table></div>}
+        {viewedRun && <div className="backtest-results">
+          <p className="backtest-source">{viewedRun.result.broker} data · {viewedRun.symbol} · {viewedRun.timeframe} · hold {viewedRun.holdBars} candles · {viewedRun.result.bars.toLocaleString()} candles reviewed</p>
+          {viewedRun.result.signals.length > 0 ? <div className="table-scroll"><table><thead><tr><th>Signal time</th><th>Direction</th><th>Fixed-hold result</th></tr></thead><tbody>{viewedRun.result.signals.map((signal) => <tr key={`${signal.time}-${signal.direction}`}><td>{formatDateTime(signal.time)}</td><td>{signal.direction}</td><td className={(signal.returnPct ?? 0) >= 0 ? "positive" : "negative"}>{(signal.returnPct ?? 0) >= 0 ? "+" : ""}{(signal.returnPct ?? 0).toFixed(2)}%</td></tr>)}</tbody></table></div> : <p className="muted">That run found no completed signals.</p>}
+        </div>}
       </section>
       </div>
     </div>

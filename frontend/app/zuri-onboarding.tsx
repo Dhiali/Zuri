@@ -5,7 +5,7 @@ import { backendUrl } from "./linked-account";
 import { ZuriMascot, type ZuriExpression } from "./zuri-journey";
 
 export type Involvement = "side_by_side" | "occasional" | "on_demand";
-export type TourChoice = "none" | "quick" | "detailed" | "broker";
+export type TourChoice = "none" | "quick" | "detailed";
 export type OnboardingResult = { tour: TourChoice; involvement: Involvement; seeScreen: boolean; actOnScreen: boolean; marketLevels: Record<string, string> };
 export type MarketLayout = { mode: "list" | "tabs" | "sections"; focus: string | null; markets: { market: string; level: string; detail: "simple" | "full"; collapsed: boolean }[] };
 const LAYOUT_KEY = "zuri.layout";
@@ -26,8 +26,7 @@ export const loadInvolvement = (): Involvement => {
 export const saveInvolvement = (value: Involvement) => window.localStorage.setItem(INVOLVEMENT_KEY, value);
 
 const tours: { id: TourChoice; title: string; text: string }[] = [
-  { id: "detailed", title: "Walk me through everything", text: "A detailed guided tour of every section. I take over the screen and explain each control." },
-  { id: "broker", title: "Set up a practice broker account", text: "I take over the screen and take you through opening a free paper broker account and linking it to Zuri." },
+  { id: "detailed", title: "Walk me through everything", text: "A full guided tour of every section, including opening a free practice broker account and linking it to Zuri. I take over the screen and explain each control." },
   { id: "quick", title: "A quick look around", text: "A short tour of the main sections, about a minute." },
   { id: "none", title: "I'll explore on my own", text: "No tour. Ask me whenever you need something." },
 ];
@@ -210,7 +209,7 @@ export function ZuriOnboarding({ accessToken, initialSee, initialAct, onFinish, 
                 if (!tour || !involvement) return;
                 setSaving(true);
                 try { await onFinish({ tour, involvement, seeScreen, actOnScreen, marketLevels: roadmap?.levels ?? {} }); } finally { setSaving(false); }
-              }}>{saving ? "Setting up…" : tour === "none" ? "Take me to my dashboard" : tour === "broker" ? "Set up my broker" : "Start my tour"}</button>
+              }}>{saving ? "Setting up…" : tour === "none" ? "Take me to my dashboard" : "Start my tour"}</button>
             </div>
           </div>
         )}

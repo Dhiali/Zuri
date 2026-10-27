@@ -275,6 +275,18 @@ class OnboardingTests(unittest.TestCase):
         for step in detailed["steps"]:
             self.assertIn("target", step)
 
+    def test_tours_cover_dashboard_features_and_broker_setup(self):
+        for detail in ("quick", "detailed"):
+            targets = [s["target"] for s in za.build_walkthrough("site_tour", {"detail": detail}, AVAILABLE)["steps"]]
+            for target in ("dash-weekly", "dash-learn", "dash-community"):
+                self.assertIn(target, targets)
+        detailed = za.build_walkthrough("site_tour", {"detail": "detailed"}, AVAILABLE)["steps"]
+        for target in ("news-charts", "chart-scanners", "chart-backtest", "chart-backtest-history"):
+            self.assertIn(target, [s["target"] for s in detailed])
+        self.assertIn("Connect your account", [s["title"] for s in detailed])
+        self.assertIn("trade-ticket", [s["target"] for s in detailed])
+        self.assertIn("nav-Journal", [s["target"] for s in detailed])
+
     def test_involvement_levels(self):
         self.assertEqual(set(za.INVOLVEMENT_LEVELS), {"side_by_side", "occasional", "on_demand"})
 
