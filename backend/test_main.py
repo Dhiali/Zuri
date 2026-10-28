@@ -925,6 +925,19 @@ class ChartResearchTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["scanner"]["threshold"], 70)
 
+    def test_broker_link_rejects_account_ids_with_path_characters(self):
+        response = self.client.post(
+            "/api/brokers/link",
+            json={"broker": "oanda", "environment": "paper", "credentials": {"api_token": "tok", "account_id": "../../x?y=1"}},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_responses_carry_security_headers(self):
+        response = self.client.get("/api/brokers")
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+        self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+
     @patch("backend.main.get_groq_client")
     def test_ai_scanner_configuration_rejects_invalid_model_output(self, get_client):
         completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"condition":"send_trade"}'))])

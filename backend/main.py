@@ -72,6 +72,17 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+    response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY")) if os.getenv("GROQ_API_KEY") else None
 
 
@@ -1666,6 +1677,9 @@ def link_broker(request: BrokerLinkRequest, user: dict = Depends(require_authent
     credentials = {field: request.credentials.get(field, "").strip() for field in info["fields"]}
     if any(not value or len(value) > 512 for value in credentials.values()):
         raise HTTPException(status_code=422, detail="All credential fields are required.")
+    # The account ID goes into the broker URL path, so it must not carry path or query characters.
+    if "account_id" in credentials and not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", credentials["account_id"]):
+        raise HTTPException(status_code=422, detail="That account ID doesn't look right. It should contain only letters, numbers and dashes.")
 
     adapter = brokers.get_adapter(request.broker, credentials, request.environment)
     account = adapter.account()  # Validates the credentials before anything is stored.
