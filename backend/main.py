@@ -869,7 +869,19 @@ def configure_scanner(
         content = response.choices[0].message.content
         if not content:
             raise ValueError("The AI returned an empty scanner setup.")
-        scanner = ScannerDefinition.model_validate(json.loads(content))
+        raw = json.loads(content)
+        if not isinstance(raw, dict):
+            raise ValueError("The AI returned an invalid scanner setup.")
+        # The model often fills fields the chosen condition doesn't use with 0; drop them so defaults apply.
+        used = {
+            "breakout": {"lookback"},
+            "moving_average_cross": {"fast_period", "slow_period"},
+            "rsi_level": {"threshold"},
+        }.get(raw.get("condition"), set())
+        for field in ("lookback", "fast_period", "slow_period", "threshold"):
+            if field not in used:
+                raw.pop(field, None)
+        scanner = ScannerDefinition.model_validate(raw)
     except HTTPException:
         raise
     except Exception as e:

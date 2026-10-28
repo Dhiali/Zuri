@@ -910,6 +910,22 @@ class ChartResearchTests(unittest.TestCase):
         self.assertIsInstance(ScannerDefinition.model_validate(scanner), ScannerDefinition)
 
     @patch("backend.main.get_groq_client")
+    def test_ai_scanner_configuration_ignores_zeroed_unused_fields(self, get_client):
+        content = '{"name":"RSI 70","condition":"rsi_level","direction":"above","lookback":0,"fast_period":0,"slow_period":0,"threshold":70}'
+        completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+        get_client.return_value = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: completion))
+        )
+
+        response = self.client.post(
+            "/api/scanners/configure",
+            json={"prompt": "RSI above 70", "symbol": "BTCUSD", "timeframe": "15m"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["scanner"]["threshold"], 70)
+
+    @patch("backend.main.get_groq_client")
     def test_ai_scanner_configuration_rejects_invalid_model_output(self, get_client):
         completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"condition":"send_trade"}'))])
         get_client.return_value = SimpleNamespace(
