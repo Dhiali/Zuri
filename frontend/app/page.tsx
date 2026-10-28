@@ -654,7 +654,7 @@ function TradingWorkspace() {
           <div className="nav-bottom"><button data-zuri-target="nav-Settings" onClick={() => setSection("Settings")} className={section === "Settings" ? "nav-item selected" : "nav-item"} title="Settings"><Icon name="Settings"/><span>Settings</span></button></div>
         </nav>
         <div className="content-column">
-          <div className="page-heading"><div><div className="eyebrow">PERSONAL TRADING DESK <span>•</span> {deskDate} <span>•</span> <time>{deskTime}</time></div><h1>{section === "Charts" ? "Charts" : section}</h1></div></div>
+          <div className="page-heading"><div><div className="eyebrow">PERSONAL TRADING DESK <span>•</span> {deskDate} <span>•</span> <time>{deskTime}</time></div><h1>{section}</h1></div></div>
           {dataError && <div className="auth-error" role="alert">{dataError}</div>}
           {workspaceDataUserId !== session?.user.id ? (
             <div className="content-card"><p>{dataError ? "Your saved workspace data could not be loaded. Please try again after checking the database setup." : "Loading your saved workspace…"}</p></div>
@@ -704,6 +704,8 @@ function TradingWorkspace() {
           </>}
           {section === "Dashboard" && (
             <Dashboard
+              userId={userId}
+              fallbackName={typeof session?.user.user_metadata?.display_name === "string" ? session.user.user_metadata.display_name : ""}
               hero={journey?.phase === "done" ? (
                 <section className="content-card zuri-next" data-zuri-target="zuri-next">
                   <ZuriMascot mood="idle" size={56} />
@@ -759,7 +761,7 @@ function TradingWorkspace() {
           </>}
         </div>
         {section !== "Settings" && <aside data-zuri-target="quotes-rail" className={watchlistOpen ? "right-rail" : "right-rail collapsed"}>
-          <div className="rail-head"><div><h2>Quotes</h2><span className="rail-count"><i className="quote-live-dot"/> {watchlistInstruments.length} symbols · delayed ≤15 min</span></div><button className="rail-action" title="Add symbol" onClick={() => document.getElementById("market-search")?.focus()}>＋</button><button className="rail-action" title="Collapse quotes" onClick={() => setWatchlistOpen(false)}>⌄</button></div>
+          <div className="rail-head"><div><h2>Quotes</h2><span className="rail-count"><i className="quote-live-dot"/> {watchlistInstruments.length} symbols · delayed ≤15 min</span></div></div>
           {watchlistOpen && <>
             <label className="search-box" data-zuri-target="market-search"><span>⌕</span><input id="market-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search quotes"/><kbd>/</kbd></label>
             <div className="watchlist-columns"><span>SYMBOL</span><span>PRICE</span><span>CHANGE</span></div>
@@ -1181,7 +1183,7 @@ function JournalView({ entries, token, refreshKey, onReload, onNewEntry, onDelet
   };
   return (
     <div className="secondary-view journal-view">
-      <div className="section-title journal-view-heading"><div><span className="small-label">AUTOMATIC JOURNEY TRACKING · SAVED TO YOUR ACCOUNT</span></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
+      <div className="section-title journal-view-heading"><div className="journal-toolbar-meta"><span className="small-label">AUTOMATIC JOURNEY TRACKING · SAVED TO YOUR ACCOUNT</span><span className="journal-count"><b>{entries.length}</b> {entries.length === 1 ? "entry" : "entries"}<i>·</i><b>{entries.filter((entry) => entry.source === "auto").length}</b> auto-captured</span></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
       <JournalInsights token={token} refreshKey={refreshKey} onEntriesChanged={onReload} />
       {draftError && <p className="auth-message" role="alert">{draftError}</p>}
       {entries.length === 0 ? <div className="content-card journal-empty"><span className="small-label">NO ENTRIES YET</span><h3>Start with a chart idea</h3><p>Capture a setup, define your risk, and write down what would invalidate the trade.</p><button className="outline-button" onClick={onNewEntry}>Open chart and write a note</button></div> : <div className="journal-entry-list">{entries.map((entry) => <article className="content-card journal-entry" key={entry.id}>
@@ -1285,7 +1287,11 @@ function Dashboard({
   checklist,
   token,
   refreshKey,
+  userId,
+  fallbackName,
 }: {
+  userId?: string;
+  fallbackName: string;
   hero: React.ReactNode;
   checklist: React.ReactNode;
   token: string;
@@ -1301,10 +1307,18 @@ function Dashboard({
   const [greetingDate] = useState(() => new Date());
   const hour = greetingDate.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const [savedName, setSavedName] = useState("");
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    void loadUserProfile(userId).then((loaded) => { if (!cancelled) setSavedName(loaded.display_name ?? ""); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [userId]);
+  const firstName = (savedName || fallbackName).trim().split(/\s+/)[0] ?? "";
   return (
     <div className="secondary-view dashboard-view">
       <div className="dashboard-greeting">
-        <div><h2>{greeting}.</h2><p>Here’s the signal behind your numbers today.</p></div>
+        <div><h2>{greeting}{firstName ? <>, <span className="greeting-name">{firstName}</span></> : ""}</h2><p>Here’s the signal behind your numbers today.</p></div>
       </div>
       {hero}
       {checklist}
@@ -1498,9 +1512,6 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       <div className="trade-intro"><div><span className="small-label">ORDER TICKET</span><h2>Place an order</h2><p>{linked.data ? `${linked.data.broker_name} ${isLive ? "live" : "paper"} account · ${accountCurrency}` : "No broker linked"}</p></div>{linked.data && <span className={isLive ? "paper-tag live-tag" : "paper-tag"}>{isLive ? "LIVE · REAL MONEY" : "PAPER MODE"}</span>}</div>
       {!linked.data && <p className="auth-message">{linked.status === "loading" ? "Loading your broker account…" : linked.status === "none" ? "Link a broker in Settings → Broker to place orders." : linked.error}</p>}
 
-      {showCoach && <FirstTradeCoach step={coachStep} onStep={moveCoach} onExit={() => closeCoach(false)} placed={coachPlaced} onFinish={() => closeCoach(true)} note={levelsNote} onAskLevels={() => void askZuriForLevels()} levelsBusy={levelsBusy} />}
-      {!showCoach && linked.data && <button className="text-action coach-reopen" onClick={openCoach}>Guide me through a trade step by step →</button>}
-
       <div className="trade-account-row">
         <div className="trade-account-card">
           <span>Balance</span>
@@ -1515,6 +1526,9 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
           <strong>{formatCurrency(buyingPower)}</strong>
         </div>
       </div>
+
+      {showCoach && <FirstTradeCoach step={coachStep} onStep={moveCoach} onExit={() => closeCoach(false)} placed={coachPlaced} onFinish={() => closeCoach(true)} note={levelsNote} onAskLevels={() => void askZuriForLevels()} levelsBusy={levelsBusy} />}
+      {!showCoach && linked.data && <button className="text-action coach-reopen" onClick={openCoach}>Guide me through a trade step by step →</button>}
 
       <div className="trade-layout">
         <section className="content-card order-card">
@@ -1747,13 +1761,13 @@ function SettingsView({
               <div><b>Email</b><small>Your sign-in address</small></div>
               {accountEditing
                 ? <input id="account-email" name="email" type="email" defaultValue={email} required autoComplete="email" aria-label="Email address" />
-                : <button className="account-detail-value" type="button" disabled={!profile} onClick={() => { setAccountEditing(true); setAccountEditError(""); setAccountEditMessage(""); }}>{email}</button>}
+                : <span className="account-detail-static">{email}</span>}
             </div>
             <div className="setting-row">
               <div><b>Name</b><small>Name shown in Zuri</small></div>
               {accountEditing
                 ? <input id="profile-name" name="displayName" defaultValue={profileName} maxLength={60} autoComplete="name" aria-label="Display name" />
-                : <button className="account-detail-value" type="button" disabled={!profile} onClick={() => { setAccountEditing(true); setAccountEditError(""); setAccountEditMessage(""); }}>{profile?.display_name || "Add your name"}</button>}
+                : <span className="account-detail-static">{profile?.display_name || "Not set"}</span>}
             </div>
             {accountEditError && <div className="auth-error" role="alert">{accountEditError}</div>}
             {accountEditMessage && <div className="auth-message" role="status">{accountEditMessage}</div>}
@@ -1775,7 +1789,6 @@ function SettingsView({
           {profile?.trading_experience === "Experienced" && <p className="auth-message" role="note">Zuri is built for newer traders first. You can use everything here, and the assistant will keep answers concise and technical. Advanced tools are on the way.</p>}
           {profile?.trading_experience === "Learning the basics" && <p className="auth-message" role="note">The assistant will use standard trading terms with short reminders as you learn.</p>}
         </div>
-        <BrokerConnections onChange={linked.refresh} />
       </>
     ),
     Broker: (

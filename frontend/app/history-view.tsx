@@ -62,10 +62,6 @@ export function HistoryView({ linked, token, refreshKey }: { linked: LinkedAccou
   return (
     <div className="secondary-view">
       <div className="section-title history-title" data-zuri-target="history-log">
-        <div>
-          <span className="small-label">{linked.data ? `${linked.data.broker_name} · ${linked.data.environment.toUpperCase()} · TRADE LOG` : "TRADE LOG"}</span>
-          <h2>History</h2>
-        </div>
         <button className="outline-button" type="button" onClick={exportCsv} disabled={tab === "open" || !data}>⇩ <span>Export CSV</span></button>
       </div>
 

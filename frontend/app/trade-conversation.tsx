@@ -72,7 +72,7 @@ export function TradeConversation({ token, symbol, riskPercent, ready, onUsePlan
 
   return (
     <section className="content-card trade-convo" data-zuri-target="trade-convo">
-      <div className="trade-convo-zuri"><ZuriMascot mood={busy ? "talking" : "idle"} size={96} emote={emote} /></div>
+      <div className="trade-convo-zuri"><ZuriMascot mood={busy ? "talking" : "idle"} size={52} emote={emote} /></div>
       <div className="trade-convo-body">
         <div><span className="small-label">OPTIONAL · NEED HELP DECIDING?</span><h2>Talk your idea through with Zuri</h2></div>
         <div className="trade-convo-log" aria-live="polite">
@@ -101,8 +101,10 @@ export function TradeConversation({ token, symbol, riskPercent, ready, onUsePlan
         {error && <p className="auth-error" role="alert">{error}</p>}
         {!ready && <p className="auth-message">Link a broker in Settings to talk through a trade with live numbers.</p>}
         <form className="trade-convo-form" onSubmit={(event) => { event.preventDefault(); void send(input); }}>
-          <input value={input} maxLength={500} onChange={(event) => setInput(event.target.value)} placeholder={`e.g. "I think ${symbol || "AAPL"} will bounce, size it for me"`} disabled={!ready || busy} aria-label="Message Zuri" />
-          <button className="solid-button" type="submit" disabled={!ready || busy || !input.trim()}>Send</button>
+          <div className="trade-convo-composer">
+            <input value={input} maxLength={500} onChange={(event) => setInput(event.target.value)} placeholder={`e.g. "I think ${symbol || "AAPL"} will bounce, size it for me"`} disabled={!ready || busy} aria-label="Message Zuri" />
+            <button className="solid-button" type="submit" disabled={!ready || busy || !input.trim()}>Send</button>
+          </div>
         </form>
       </div>
     </section>
