@@ -78,6 +78,18 @@ def _num(value: Any) -> float | None:
         return None
 
 
+# Names Zuri's charts use that Alpaca's stock API does not trade. "GOLD" on Alpaca is actually Barrick Mining stock, not the metal.
+ALPACA_NOT_TRADABLE = {
+    "GOLD": "Alpaca doesn't trade spot gold, and the ticker GOLD there is a mining company, not the metal. To trade gold on Alpaca use the GLD ETF; for spot gold (XAUUSD) link an OANDA account.",
+    "XAUUSD": "Alpaca doesn't trade spot gold. To trade gold on Alpaca use the GLD ETF; for spot gold (XAUUSD) link an OANDA account.",
+}
+
+
+def check_symbol_supported(broker: str, symbol: str) -> None:
+    if broker == "alpaca" and symbol.upper() in ALPACA_NOT_TRADABLE:
+        raise HTTPException(status_code=400, detail=ALPACA_NOT_TRADABLE[symbol.upper()])
+
+
 class AlpacaAdapter:
     def __init__(self, creds: dict[str, str], environment: str):
         host = "api.alpaca.markets" if environment == "live" else "paper-api.alpaca.markets"
@@ -111,11 +123,20 @@ class AlpacaAdapter:
         ]
 
     def price(self, symbol: str) -> float:
-        data = _request("GET", f"https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest", headers=self.headers)
+        try:
+            data = _request("GET", f"https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest", headers=self.headers, params={"feed": "iex"})
+        except HTTPException as e:
+            if e.status_code == 400 and "rejected" in str(e.detail):
+                raise HTTPException(status_code=502, detail=f"Alpaca would not give a live price for {symbol}. Your keys are fine, but this symbol may not be available on your Alpaca data plan.") from e
+            raise
         price = _num((data.get("trade") or {}).get("p"))
         if price is None:
             raise HTTPException(status_code=502, detail=f"Could not fetch price for {symbol}.")
         return price
+
+    def market_clock(self):
+        data = _request("GET", f"{self.base}/v2/clock", headers=self.headers)
+        return {"is_open": bool(data.get("is_open")), "next_open": data.get("next_open"), "next_close": data.get("next_close")}
 
     def place_order(self, symbol: str, side: str, quantity: float, stop_loss: float | None = None, take_profit: float | None = None):
         payload = {"symbol": symbol, "qty": str(quantity), "side": side, "type": "market", "time_in_force": "day"}
@@ -127,12 +148,33 @@ class AlpacaAdapter:
                 stop_loss={"stop_price": str(stop_loss)},
             )
         data = _request("POST", f"{self.base}/v2/orders", headers=self.headers, json=payload)
-        return {"order_id": data.get("id"), "status": data.get("status")}
+        result = {"order_id": data.get("id"), "status": data.get("status")}
+        try:
+            clock = _request("GET", f"{self.base}/v2/clock", headers=self.headers)
+            result["market_open"] = bool(clock.get("is_open"))
+            result["next_open"] = clock.get("next_open")
+        except HTTPException:
+            pass
+        return result
+
+    def cancel_order(self, order_id: str):
+        try:
+            response = requests.delete(f"{self.base}/v2/orders/{order_id}", headers=self.headers, timeout=TIMEOUT)
+        except requests.RequestException as e:
+            raise HTTPException(status_code=502, detail="The broker could not be reached. Please try again.") from e
+        if response.status_code in (401, 403):
+            raise HTTPException(status_code=400, detail="The broker rejected these credentials.")
+        if response.status_code == 404:
+            raise HTTPException(status_code=404, detail="That order is no longer open. It may have already filled or been cancelled.")
+        if response.status_code == 422:
+            raise HTTPException(status_code=409, detail="That order can't be cancelled any more. It may already be filling.")
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"Broker error: {response.status_code}")
 
     def open_orders(self):
         data = _request("GET", f"{self.base}/v2/orders", headers=self.headers, params={"status": "open"})
         return [
-            {"id": o.get("id"), "symbol": o.get("symbol"), "quantity": _num(o.get("qty")), "side": o.get("side"), "type": o.get("type"), "status": o.get("status")}
+            {"id": o.get("id"), "symbol": o.get("symbol"), "quantity": _num(o.get("qty")), "side": o.get("side"), "type": o.get("type"), "status": o.get("status"), "submitted_at": o.get("submitted_at"), "order_class": o.get("order_class")}
             for o in data
         ]
 
@@ -188,6 +230,27 @@ class AlpacaAdapter:
         if timeframe != "4h":
             return candles
         return _aggregate_candles(candles, 4)
+
+    def close_position(self, symbol: str):
+        try:
+            response = requests.delete(f"{self.base}/v2/positions/{symbol}", headers=self.headers, timeout=TIMEOUT)
+        except requests.RequestException as e:
+            raise HTTPException(status_code=502, detail="The broker could not be reached. Please try again.") from e
+        if response.status_code in (401, 403):
+            raise HTTPException(status_code=400, detail="The broker rejected these credentials.")
+        if response.status_code == 404:
+            raise HTTPException(status_code=404, detail="You no longer hold that position. It may already be closed.")
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("message")
+            except (ValueError, AttributeError):
+                detail = None
+            raise HTTPException(status_code=502, detail=f"Broker error: {detail or response.status_code}")
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        return {"order_id": data.get("id"), "status": data.get("status")}
 
     def close_all(self):
         _request("DELETE", f"{self.base}/v2/orders", headers=self.headers)

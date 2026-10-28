@@ -7,6 +7,9 @@ import { BrokerConnections } from "./broker-connections";
 import { HistoryView } from "./history-view";
 import { CoachingPanel } from "./dashboard-insights";
 import { TradeConversation } from "./trade-conversation";
+import { FirstTradeCoach } from "./trade-coach";
+import { MarketClock } from "./market-clock";
+import { PendingOrders } from "./pending-orders";
 import { SnapshotGallery, captureScreenForTrade } from "./trade-snapshots";
 import { ChartResearch } from "./chart-research";
 import { backendUrl, formatMoney, useLinkedAccount, type LinkedAccountState, type LinkedPosition } from "./linked-account";
@@ -633,7 +636,7 @@ function TradingWorkspace() {
       <header className="topbar">
         <a className="brand" href="#charts" onClick={() => setSection("Charts")} aria-label="Zuri home"><Image className="brand-logo" src="/zuri-logo.jpg" alt="" width={768} height={768} priority /><span>zuri<span className="brand-dot">.</span></span></a>
         <div className="top-divider" />
-        <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">{linkedAccount.data ? `${linkedAccount.data.broker_name.toUpperCase()} · ${linkedAccount.data.environment === "live" ? "LIVE" : "PAPER"}` : "NO BROKER LINKED"}</span></div>
+        <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">{linkedAccount.data ? `${linkedAccount.data.broker_name.toUpperCase()} · ${linkedAccount.data.environment === "live" ? "LIVE" : "PAPER"}` : "NO BROKER LINKED"}</span><MarketClock token={accessToken} enabled={Boolean(linkedAccount.data)} /></div>
         <div className="topbar-right"><span className="zuri-anchor"><button className={`icon-action zuri-top${showOnboarding ? " is-away" : ""}${bubble && !showOnboarding ? " is-speaking" : ""}`} title="Ask Zuri" aria-label="Ask Zuri" onClick={() => setAssistantOpen(true)}><ZuriMascot size={34} /></button>{bubble && !showOnboarding && (
           <div className="zuri-bubble" role="status" aria-label="Message from Zuri">
             <p>{bubble}</p>
@@ -1178,7 +1181,7 @@ function JournalView({ entries, token, refreshKey, onReload, onNewEntry, onDelet
   };
   return (
     <div className="secondary-view journal-view">
-      <div className="section-title journal-view-heading"><div><span className="small-label">AUTOMATIC JOURNEY TRACKING · SAVED TO YOUR ACCOUNT</span><h2>Trading journal</h2></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
+      <div className="section-title journal-view-heading"><div><span className="small-label">AUTOMATIC JOURNEY TRACKING · SAVED TO YOUR ACCOUNT</span></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
       <JournalInsights token={token} refreshKey={refreshKey} onEntriesChanged={onReload} />
       {draftError && <p className="auth-message" role="alert">{draftError}</p>}
       {entries.length === 0 ? <div className="content-card journal-empty"><span className="small-label">NO ENTRIES YET</span><h3>Start with a chart idea</h3><p>Capture a setup, define your risk, and write down what would invalidate the trade.</p><button className="outline-button" onClick={onNewEntry}>Open chart and write a note</button></div> : <div className="journal-entry-list">{entries.map((entry) => <article className="content-card journal-entry" key={entry.id}>
@@ -1335,12 +1338,17 @@ function Dashboard({
   );
 }
 function Metric({ label, value, change }: { label: string; value: string; change: string }) { return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small className={change.startsWith("+") ? "positive" : "muted"}>{change}</small></div>; }
+function alpacaEquivalent(broker: string | undefined, symbol: string) {
+  return broker === "alpaca" && ["GOLD", "XAUUSD"].includes(symbol.trim().toUpperCase()) ? "GLD" : symbol;
+}
 function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token, onTraded, riskPercent }: { symbol: Instrument; instruments: Instrument[]; orderSide: "Buy" | "Sell"; setOrderSide: (side: "Buy" | "Sell") => void; linked: LinkedAccountState; token: string; onTraded: () => void; riskPercent: number }) {
   const [stopLoss, setStopLoss] = useState("");
   const [takeProfit, setTakeProfit] = useState("");
   const [tradeBase, setTradeSymbol] = useState(symbol);
   const tradeSymbol = instruments.find((item) => item.symbol === tradeBase.symbol) ?? tradeBase;
-  const [orderSymbol, setOrderSymbol] = useState(symbol.symbol);
+  const [rawOrderSymbol, setOrderSymbol] = useState(symbol.symbol);
+  const orderSymbol = alpacaEquivalent(linked.data?.broker, rawOrderSymbol);
+  const symbolSwapped = orderSymbol !== rawOrderSymbol;
   const [quantity, setQuantity] = useState("1");
   const [limitPrice, setLimitPrice] = useState(plainPrice(symbol.price));
   const [confirmed, setConfirmed] = useState(false);
@@ -1348,6 +1356,93 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
   const [orderBusy, setOrderBusy] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
   const [orderError, setOrderError] = useState("");
+  const [coachOn, setCoachOn] = useState(() => typeof window !== "undefined" && window.localStorage.getItem("zuri-first-trade-coach") !== "done");
+  const [coachStep, setCoachStep] = useState(() => (typeof window !== "undefined" ? Number(window.localStorage.getItem("zuri-first-trade-step")) || 0 : 0));
+  const [coachPlaced, setCoachPlaced] = useState(false);
+  const [levelsBusy, setLevelsBusy] = useState(false);
+  const [ordersRefresh, setOrdersRefresh] = useState(0);
+  const [closingSymbol, setClosingSymbol] = useState("");
+  const [closeMessage, setCloseMessage] = useState("");
+  const [closeError, setCloseError] = useState("");
+  async function closePosition(position: LinkedPosition) {
+    if (!linked.data || !position.symbol) return;
+    const long = (position.side ?? "long") === "long";
+    if (!window.confirm(`Close your ${long ? "long" : "short"} ${position.quantity ?? ""} ${position.symbol} position at the current market price? This ${long ? "sells" : "buys back"} everything you hold in it.`)) return;
+    let phrase = "";
+    if (linked.data.environment === "live") {
+      phrase = window.prompt('This is a LIVE account. Type CONFIRM LIVE to close this position:') ?? "";
+      if (!phrase) return;
+    }
+    setClosingSymbol(position.symbol);
+    setCloseError("");
+    setCloseMessage("");
+    try {
+      const query = phrase ? `&confirmation_phrase=${encodeURIComponent(phrase)}` : "";
+      const response = await fetch(`${backendUrl}/api/positions/${encodeURIComponent(position.symbol)}?broker=${linked.data.broker}${query}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The position could not be closed.");
+      setCloseMessage(`Closing order sent for ${position.symbol}. If the market is closed, Alpaca will close it at the next open and it will wait under Pending orders.`);
+      setOrdersRefresh((value) => value + 1);
+      linked.refresh();
+      onTraded();
+    } catch (error) {
+      setCloseError(error instanceof Error ? error.message : "The position could not be closed.");
+      linked.refresh();
+    } finally {
+      setClosingSymbol("");
+    }
+  }
+  const [levelsNote, setLevelsNote] = useState("");
+  const [coachAsked, setCoachAsked] = useState(false);
+  const showCoach = coachOn && Boolean(linked.data) && (coachAsked || coachPlaced || coachStep > 0 || (linked.data?.positions.length ?? 0) === 0);
+  const focusClass = (step: number) => (showCoach && !coachPlaced && coachStep === step ? " coach-focus" : "");
+  function moveCoach(step: number) {
+    setCoachStep(step);
+    window.localStorage.setItem("zuri-first-trade-step", String(step));
+  }
+  function closeCoach(finished: boolean) {
+    setCoachOn(false);
+    setCoachPlaced(false);
+    if (finished) window.localStorage.setItem("zuri-first-trade-coach", "done");
+  }
+  function openCoach() {
+    window.localStorage.removeItem("zuri-first-trade-coach");
+    window.localStorage.removeItem("zuri-first-trade-step");
+    setCoachStep(0);
+    setCoachPlaced(false);
+    setCoachAsked(true);
+    setCoachOn(true);
+  }
+  async function askZuriForLevels() {
+    if (!linked.data || !orderSymbol.trim()) {
+      setLevelsNote("Choose a symbol first (step 1), then I can suggest the levels.");
+      return;
+    }
+    setLevelsBusy(true);
+    setLevelsNote("");
+    try {
+      const response = await fetch(`${backendUrl}/api/trade/suggest-levels`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ symbol: orderSymbol.trim(), side: orderSide.toLowerCase(), quantity: validOrder ? quantityValue : null, risk_percent: riskPercent }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Zuri could not suggest levels.");
+      if (!body.stops_supported) {
+        setLevelsNote("Your broker connection can't attach a stop automatically yet, so set it with your broker.");
+        return;
+      }
+      setStopLoss(String(body.stop_loss));
+      setTakeProfit(String(body.take_profit));
+      setConfirmed(false);
+      const risk = typeof body.risk_amount === "number" ? ` With your quantity, the most you'd lose at the stop is about ${formatMoney(body.risk_amount, body.currency ?? accountCurrency)}.` : "";
+      setLevelsNote(`I filled in a stop at ${body.stop_loss} and a target at ${body.take_profit}, based on recent price swings.${risk} Change them if you like. They're your call.`);
+    } catch (error) {
+      setLevelsNote(error instanceof Error ? error.message : "Zuri could not suggest levels.");
+    } finally {
+      setLevelsBusy(false);
+    }
+  }
   const account = linked.data?.account;
   const isLive = linked.data?.environment === "live";
   const accountCurrency = account?.currency ?? "USD";
@@ -1380,7 +1475,11 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The order was rejected.");
-      setOrderMessage(`${isLive ? "LIVE" : "Paper"} order sent: ${body.status ?? "submitted"}.`);
+      const filled = body.status === "filled";
+      const closedNote = body.market_open === false && !filled ? ` The US stock market is closed right now, so Alpaca is holding this order and will fill it when the market opens${body.next_open ? ` (${new Date(body.next_open).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} your time)` : ""}. It won't show as a position until then. Check History > Orders to see it waiting.` : "";
+      setOrderMessage(`${isLive ? "LIVE" : "Paper"} order ${filled ? "filled" : "accepted"}: ${body.status ?? "submitted"}.${closedNote}`);
+      if (showCoach) setCoachPlaced(true);
+      setOrdersRefresh((value) => value + 1);
       setConfirmed(false);
       setLivePhrase("");
       setStopLoss("");
@@ -1399,23 +1498,10 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       <div className="trade-intro"><div><span className="small-label">ORDER TICKET</span><h2>Place an order</h2><p>{linked.data ? `${linked.data.broker_name} ${isLive ? "live" : "paper"} account · ${accountCurrency}` : "No broker linked"}</p></div>{linked.data && <span className={isLive ? "paper-tag live-tag" : "paper-tag"}>{isLive ? "LIVE · REAL MONEY" : "PAPER MODE"}</span>}</div>
       {!linked.data && <p className="auth-message">{linked.status === "loading" ? "Loading your broker account…" : linked.status === "none" ? "Link a broker in Settings → Broker to place orders." : linked.error}</p>}
 
-      <TradeConversation token={token} symbol={orderSymbol.trim()} riskPercent={riskPercent} ready={Boolean(linked.data)} onUsePlan={(plan) => {
-        setOrderSymbol(plan.symbol);
-        const known = initialInstruments.find((item) => item.symbol === plan.symbol);
-        if (known) setTradeSymbol(known);
-        setOrderSide(plan.side === "buy" ? "Buy" : "Sell");
-        setQuantity(String(plan.units));
-        setLimitPrice(String(plan.price));
-        setStopLoss(plan.stops_supported ? String(plan.stop_loss) : "");
-        setTakeProfit(plan.stops_supported ? String(plan.take_profit) : "");
-        setConfirmed(false);
-      }} />
+      {showCoach && <FirstTradeCoach step={coachStep} onStep={moveCoach} onExit={() => closeCoach(false)} placed={coachPlaced} onFinish={() => closeCoach(true)} note={levelsNote} onAskLevels={() => void askZuriForLevels()} levelsBusy={levelsBusy} />}
+      {!showCoach && linked.data && <button className="text-action coach-reopen" onClick={openCoach}>Guide me through a trade step by step →</button>}
 
       <div className="trade-account-row">
-        <div className="trade-account-card">
-          <span>Account currency</span>
-          <strong>{accountCurrency}</strong>
-        </div>
         <div className="trade-account-card">
           <span>Balance</span>
           <strong>{formatCurrency(balance)}</strong>
@@ -1432,18 +1518,21 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
 
       <div className="trade-layout">
         <section className="content-card order-card">
-          <div className="side-toggle"><button className={orderSide === "Buy" ? "buy active" : "buy"} onClick={() => setOrderSide("Buy")}>Buy / Long</button><button className={orderSide === "Sell" ? "sell active" : "sell"} onClick={() => setOrderSide("Sell")}>Sell / Short</button></div>
-          <label className="field-label">Symbol<input list="order-symbols" value={orderSymbol} maxLength={20} onChange={(event) => { const value = event.target.value.toUpperCase(); setOrderSymbol(value); const nextSymbol = initialInstruments.find((item) => item.symbol === value); if (nextSymbol) { setTradeSymbol(nextSymbol); setLimitPrice(plainPrice(nextSymbol.price)); } }} placeholder={linked.data?.broker === "oanda" ? "EUR_USD" : "AAPL"}/><datalist id="order-symbols">{initialInstruments.map((item) => <option key={item.symbol} value={item.symbol}>{item.name}</option>)}</datalist></label>
+          <div className={`side-toggle${focusClass(1)}`}><button className={orderSide === "Buy" ? "buy active" : "buy"} onClick={() => setOrderSide("Buy")}>Buy / Long</button><button className={orderSide === "Sell" ? "sell active" : "sell"} onClick={() => setOrderSide("Sell")}>Sell / Short</button></div>
+          <label className={`field-label${focusClass(0)}`}>Symbol<input list="order-symbols" value={orderSymbol} maxLength={20} onChange={(event) => { const value = event.target.value.toUpperCase(); setOrderSymbol(value); const nextSymbol = initialInstruments.find((item) => item.symbol === value); if (nextSymbol) { setTradeSymbol(nextSymbol); setLimitPrice(plainPrice(nextSymbol.price)); } }} placeholder={linked.data?.broker === "oanda" ? "EUR_USD" : "AAPL"}/><datalist id="order-symbols">{initialInstruments.map((item) => <option key={item.symbol} value={item.symbol}>{item.name}</option>)}</datalist></label>
+          {symbolSwapped && <p className="auth-message" role="status">Alpaca doesn&apos;t trade spot gold, so I switched this to GLD, a fund that tracks the gold price. For spot gold (XAUUSD), link an OANDA account.</p>}
           <div className="field-row"><label className="field-label">Order type<select disabled><option>Market</option></select></label></div>
-          <div className="field-row"><label className="field-label">Quantity<input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="decimal"/></label><label className="field-label">Reference price ({accountCurrency}, estimate only)<input value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal"/></label></div>
-          <div className="field-row"><label className="field-label">Stop loss (optional)<input value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} inputMode="decimal" placeholder="Zuri can fill this"/></label><label className="field-label">Take profit (optional)<input value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} inputMode="decimal" placeholder="Zuri can fill this"/></label></div>
+          <div className={`field-row${focusClass(2)}`}><label className="field-label">Quantity<input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="decimal"/></label><label className="field-label">Reference price ({accountCurrency}, estimate only)<input value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal"/></label></div>
+          <div className={`field-row${focusClass(3)}`}><label className="field-label">Stop loss (optional)<input value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} inputMode="decimal" placeholder="Your price, or ask Zuri"/></label><label className="field-label">Take profit (optional)<input value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} inputMode="decimal" placeholder="Your price, or ask Zuri"/></label></div>
+          <div className="levels-helper"><button type="button" className="outline-button" disabled={levelsBusy || !linked.data || !orderSymbol.trim()} onClick={() => void askZuriForLevels()}>{levelsBusy ? "Zuri is checking…" : "✦ Ask Zuri to fill the stop loss and take profit"}</button>{levelsNote && <small role="status">{levelsNote}</small>}</div>
           <div className="order-estimate"><span>Estimated value</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Buying power after order</span><b>{formatCurrency(buyingPowerAfter)}</b></div>
           {isLive && <label className="field-label">Type CONFIRM LIVE to place a real-money order<input value={livePhrase} onChange={(event) => setLivePhrase(event.target.value)} autoComplete="off"/></label>}
-          <label className="field-label"><span><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}/> I confirm this {isLive ? "LIVE" : "paper"} market order</span></label>
+          <label className={`field-label${focusClass(4)}`}><span><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}/> I confirm this {isLive ? "LIVE" : "paper"} market order</span></label>
           {orderError && <p className="auth-error" role="alert">{orderError}</p>}
           {orderMessage && <p className="auth-message" role="status">{orderMessage}</p>}
           <button className={orderSide === "Buy" ? "submit-order buy-submit" : "submit-order sell-submit"} disabled={!validOrder || !linked.data || !confirmed || orderBusy || (isLive && livePhrase !== "CONFIRM LIVE")} onClick={() => void submitOrder()}>{orderBusy ? "Sending…" : `${orderSide} ${orderSymbol || "—"}`}</button><small className="disclaimer">{isLive ? "This sends a real order to your live broker account." : "Paper order only. No real funds will be used."}</small>
         </section>
+        <div className="trade-side">
         <section className="content-card trade-context">
           <div className="section-title"><div><span className="small-label">MARKET SNAPSHOT</span><h2>{tradeSymbol.symbol}</h2></div><span className={tradeSymbol.hasQuote ? (tradeSymbol.up ? "positive" : "negative") : "muted"}>{tradeSymbol.change}</span></div>
           <strong className="snapshot-price">{tradeSymbol.hasQuote && tradeSymbol.group !== "Forex" ? "$" : ""}{tradeSymbol.price}</strong>
@@ -1451,18 +1540,31 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
           <div className="snapshot-row"><span>Notional</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Exposure</span><b>{exposurePct}%</b></div>
           <div className="trade-ai-note"><span className="ai-spark">✳</span><div><b>Zuri risk check</b><p>This order would use about {exposurePct}% of your reported buying power (using your reference price). Check your size and exit plan before submitting.</p></div></div>
         </section>
+      <TradeConversation token={token} symbol={orderSymbol.trim()} riskPercent={riskPercent} ready={Boolean(linked.data)} onUsePlan={(plan) => {
+        setOrderSymbol(plan.symbol);
+        const known = initialInstruments.find((item) => item.symbol === plan.symbol);
+        if (known) setTradeSymbol(known);
+        setOrderSide(plan.side === "buy" ? "Buy" : "Sell");
+        setQuantity(String(plan.units));
+        setLimitPrice(String(plan.price));
+        setStopLoss(plan.stops_supported ? String(plan.stop_loss) : "");
+        setTakeProfit(plan.stops_supported ? String(plan.take_profit) : "");
+        setConfirmed(false);
+      }} />
+        </div>
       </div>
-      <section className="content-card positions-card"><div className="section-title"><div><span className="small-label">PORTFOLIO</span><h2>Open positions</h2></div><span className="muted">{linked.data ? `${linked.data.positions.length} positions` : "No broker linked"}</span></div>{linked.data ? <PositionsTable positions={linked.data.positions} currency={linked.data.account.currency} /> : <p className="muted">Link a broker in Settings → Broker to see your positions.</p>}</section>
+      <PendingOrders token={token} enabled={linked.data?.broker === "alpaca"} refreshKey={ordersRefresh} />
+      <section className="content-card positions-card"><div className="section-title"><div><span className="small-label">PORTFOLIO</span><h2>Open positions</h2></div><span className="muted">{linked.data ? `${linked.data.positions.length} positions` : "No broker linked"}</span></div>{linked.data ? <><PositionsTable positions={linked.data.positions} currency={linked.data.account.currency} onClose={linked.data.broker === "alpaca" ? (position) => void closePosition(position) : undefined} closing={closingSymbol} />{closeMessage && <p className="auth-message" role="status">{closeMessage}</p>}{closeError && <p className="auth-error" role="alert">{closeError}</p>}</> : <p className="muted">Link a broker in Settings → Broker to see your positions.</p>}</section>
     </div>
   );
 }
-function PositionsTable({ positions, currency }: { positions: LinkedPosition[]; currency: string | null }) {
+function PositionsTable({ positions, currency, onClose, closing }: { positions: LinkedPosition[]; currency: string | null; onClose?: (position: LinkedPosition) => void; closing?: string }) {
   if (positions.length === 0) return <p className="muted">No open positions.</p>;
   const pct = (value: number | null) => (value === null ? "—" : `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`);
-  return <div className="table-scroll"><table><thead><tr><th>SYMBOL</th><th>SIDE</th><th>QTY</th><th>ENTRY</th><th>MARK</th><th>UNREALIZED P&L</th><th>RETURN</th></tr></thead><tbody>{positions.map((position) => {
+  return <div className="table-scroll"><table><thead><tr><th>SYMBOL</th><th>SIDE</th><th>QTY</th><th>ENTRY</th><th>MARK</th><th>UNREALIZED P&L</th><th>RETURN</th>{onClose && <th></th>}</tr></thead><tbody>{positions.map((position) => {
     const isLong = (position.side ?? "long") === "long";
     const pl = position.unrealized_pl;
-    return <tr key={position.symbol}><td><b>{position.symbol}</b></td><td><span className={isLong ? "side-pill long" : "side-pill short"}>{isLong ? "Long" : "Short"}</span></td><td>{position.quantity ?? "—"}</td><td>{formatMoney(position.avg_entry_price, currency)}</td><td>{formatMoney(position.current_price, currency)}</td><td className={pl === null ? "" : pl >= 0 ? "positive" : "negative"}>{pl === null ? "—" : `${pl >= 0 ? "+" : "-"}${formatMoney(Math.abs(pl), currency)}`}</td><td className={(position.unrealized_plpc ?? 0) >= 0 ? "positive" : "negative"}>{pct(position.unrealized_plpc)}</td></tr>;
+    return <tr key={position.symbol}><td><b>{position.symbol}</b></td><td><span className={isLong ? "side-pill long" : "side-pill short"}>{isLong ? "Long" : "Short"}</span></td><td>{position.quantity ?? "—"}</td><td>{formatMoney(position.avg_entry_price, currency)}</td><td>{formatMoney(position.current_price, currency)}</td><td className={pl === null ? "" : pl >= 0 ? "positive" : "negative"}>{pl === null ? "—" : `${pl >= 0 ? "+" : "-"}${formatMoney(Math.abs(pl), currency)}`}</td><td className={(position.unrealized_plpc ?? 0) >= 0 ? "positive" : "negative"}>{pct(position.unrealized_plpc)}</td>{onClose && <td><button className="outline-button" disabled={closing === position.symbol} onClick={() => onClose(position)}>{closing === position.symbol ? "Closing…" : "Close"}</button></td>}</tr>;
   })}</tbody></table></div>;
 }
 function SettingsView({

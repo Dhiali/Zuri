@@ -1370,12 +1370,59 @@ def get_open_positions(broker: str | None = Query(default=None), user: dict = De
     return {"positions": adapter.positions()}
 
 
+@app.get("/api/market-status")
+def get_market_status(user: dict = Depends(require_authenticated_user)):
+    """Whether the linked broker's market is open. Only brokers with a trading clock report it; others return available=false."""
+    row, adapter = _active_connection(user["id"])
+    if not hasattr(adapter, "market_clock"):
+        return {"available": False, "broker": row["broker"]}
+    return {"available": True, "broker": row["broker"], **adapter.market_clock()}
+
+
 @app.get("/api/orders")
 def get_open_orders(broker: str | None = Query(default=None), user: dict = Depends(require_authenticated_user)):
     _, adapter = _active_connection(user["id"], broker)
     if not hasattr(adapter, "open_orders"):
         raise HTTPException(status_code=501, detail="Listing open orders is not supported for this broker yet.")
     return {"orders": adapter.open_orders()}
+
+
+@app.delete("/api/orders/{order_id}")
+def cancel_open_order(order_id: str, broker: str | None = Query(default=None), user: dict = Depends(require_authenticated_user)):
+    """Cancels one waiting order. Only orders that belong to the user's own linked account can be reached."""
+    if not UUID_RE.fullmatch(order_id):
+        raise HTTPException(status_code=400, detail="Invalid order id.")
+    _, adapter = _active_connection(user["id"], broker)
+    if not hasattr(adapter, "cancel_order"):
+        raise HTTPException(status_code=501, detail="Cancelling orders is not supported for this broker yet.")
+    adapter.cancel_order(order_id)
+    return {"cancelled": True}
+
+
+@app.delete("/api/positions/{symbol}")
+def close_one_position(
+    symbol: str,
+    broker: str | None = Query(default=None),
+    confirmation_phrase: str | None = Query(default=None),
+    user: dict = Depends(require_authenticated_user),
+):
+    """Closes a single open position at market. Live accounts need the same safety phrase as other live orders."""
+    symbol = symbol.upper()
+    if not re.fullmatch(r"[A-Z0-9._-]{1,20}", symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol.")
+    row, adapter = _active_connection(user["id"], broker)
+    if not hasattr(adapter, "close_position"):
+        raise HTTPException(status_code=501, detail="Closing a single position is not supported for this broker yet.")
+    if row["environment"] == "live" and confirmation_phrase != LIVE_CONFIRMATION_PHRASE:
+        raise HTTPException(status_code=400, detail=f'Closing a live position requires typing "{LIVE_CONFIRMATION_PHRASE}".')
+    held = next((p for p in adapter.positions() if str(p.get("symbol") or "").upper() == symbol), None)
+    if held is None:
+        raise HTTPException(status_code=404, detail="You no longer hold that position. It may already be closed.")
+    result = adapter.close_position(symbol)
+    closing_side = "sell" if (held.get("side") or "long") == "long" else "buy"
+    _capture_trade(user["id"], "order_placed", symbol, closing_side, held.get("quantity"), row["broker"], row["environment"],
+                   {"action": "exit", "price": held.get("current_price"), "realized_pl": held.get("unrealized_pl")}, adapter=adapter)
+    return {"closed": True, "environment": row["environment"], **result}
 
 
 @app.delete("/api/close-all")
@@ -1668,6 +1715,7 @@ def place_broker_order(broker: str, request: BrokerOrderRequest, user: dict = De
     context: dict = {}
     stop_loss = take_profit = None
     try:
+        brokers.check_symbol_supported(broker, symbol)
         if not request.confirmed:
             raise HTTPException(status_code=400, detail="Orders must be explicitly confirmed.")
         if row["environment"] == "live" and request.confirmation_phrase != LIVE_CONFIRMATION_PHRASE:
@@ -1704,6 +1752,7 @@ class TradeConverseRequest(BaseModel):
 
 
 def _build_trade_plan(adapter, broker: str, symbol: str, side: str, risk_percent: float, equity: float, buying_power: float | None, currency: str | None, stop: float | None, target: float | None) -> dict:
+    brokers.check_symbol_supported(broker, symbol)
     price = adapter.price(symbol)
     try:
         avg_range = sizing.average_range(adapter.candles(symbol))
@@ -1813,11 +1862,40 @@ def converse_about_trade(request: TradeConverseRequest, user: dict = Depends(req
                     "quantity": plan.get("units"), "risk_percent": plan["risk_percent"], "reward_to_risk": plan["reward_to_risk"],
                     "levels_source": plan["levels_source"], "environment": row["environment"], "idea": request.messages[-1].content[:300],
                 })
-            except HTTPException:
-                reply += f" I could not get a live price for {p_symbol}, so I cannot size it yet."
+            except HTTPException as e:
+                reply += f" {e.detail}" if e.status_code == 400 else f" I could not get a live price for {p_symbol}, so I cannot size it yet."
             except Exception as e:
                 logger.info("Trade plan failed: %s", e)
     return {"reply": reply, "emote": emote, "plan": plan, "broker": row["broker"], "environment": row["environment"]}
+
+
+class SuggestLevelsRequest(BaseModel):
+    symbol: str = Field(pattern=r"^[A-Za-z0-9_./-]{1,20}$")
+    side: Literal["buy", "sell"]
+    quantity: float | None = Field(default=None, gt=0)
+    risk_percent: float = Field(default=1.0, gt=0, le=100)
+
+
+@app.post("/api/trade/suggest-levels")
+def suggest_trade_levels(request: SuggestLevelsRequest, user: dict = Depends(require_authenticated_user)):
+    """Suggests only the stop and target for an order the user has already filled in themselves. No AI call, no order."""
+    row, adapter = _active_connection(user["id"])
+    account = adapter.account()
+    equity = account.get("equity") or 0
+    if not equity:
+        raise HTTPException(status_code=400, detail="Zuri could not read your account equity.")
+    try:
+        plan = _build_trade_plan(adapter, row["broker"], request.symbol.upper(), request.side, request.risk_percent, float(equity), account.get("buying_power"), account.get("currency"), None, None)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Zuri could not get a live price for {request.symbol.upper()}.") from e
+    risk_amount = round(request.quantity * abs(plan["price"] - plan["stop_loss"]), 2) if request.quantity else None
+    return {
+        "symbol": plan["symbol"], "side": plan["side"], "price": plan["price"], "stop_loss": plan["stop_loss"], "take_profit": plan["take_profit"],
+        "reward_to_risk": plan["reward_to_risk"], "stops_supported": plan["stops_supported"], "risk_amount": risk_amount,
+        "suggested_units": plan.get("units"), "currency": account.get("currency"),
+    }
 
 
 def _service_request(table: str, method: str, params: dict | None = None, **kwargs):

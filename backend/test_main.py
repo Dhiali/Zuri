@@ -867,6 +867,63 @@ class ChartResearchTests(unittest.TestCase):
         self.assertEqual(recorded[1:3], ("plan_proposed", "AAPL"))
         self.assertEqual(recorded[3]["idea"], "I want to buy AAPL")
 
+    def test_suggest_levels_fills_only_stop_and_target(self):
+        adapter = SimpleNamespace(
+            account=lambda: {"equity": 10000.0, "currency": "USD", "buying_power": 40000.0},
+            price=lambda s: 100.0,
+            candles=lambda s: [{"t": "x", "o": 100, "h": 101, "l": 99, "c": 100}] * 20,
+        )
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "paper"}, adapter)):
+            for side in ("buy", "sell"):
+                response = self.client.post("/api/trade/suggest-levels", json={"symbol": "aapl", "side": side, "quantity": 5})
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                from backend import sizing
+                self.assertTrue(sizing.levels_valid(side, 100.0, body["stop_loss"], body["take_profit"]))
+                self.assertGreater(body["risk_amount"], 0)
+            bad = self.client.post("/api/trade/suggest-levels", json={"symbol": "AAPL", "side": "hold"})
+            self.assertEqual(bad.status_code, 422)
+
+    def test_alpaca_gold_is_refused_with_a_clear_reason(self):
+        adapter = SimpleNamespace(place_order=lambda *a: {"order_id": "1"}, account=lambda: {"equity": 1000.0}, price=lambda s: 10.0, positions=lambda: [])
+        with patch("backend.main._load_connection", return_value=({"environment": "paper"}, adapter)):
+            response = self.client.post("/api/brokers/alpaca/orders", json={"symbol": "GOLD", "side": "buy", "quantity": 1, "confirmed": True})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("GLD", response.json()["detail"])
+
+    def test_market_status_reports_clock_only_for_brokers_that_have_one(self):
+        clock = SimpleNamespace(market_clock=lambda: {"is_open": False, "next_open": "2026-10-28T13:30:00Z", "next_close": "2026-10-28T20:00:00Z"})
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "paper"}, clock)):
+            body = self.client.get("/api/market-status").json()
+        self.assertTrue(body["available"])
+        self.assertFalse(body["is_open"])
+        with patch("backend.main._active_connection", return_value=({"broker": "oanda", "environment": "paper"}, SimpleNamespace())):
+            self.assertFalse(self.client.get("/api/market-status").json()["available"])
+
+    def test_cancel_order_rejects_bad_ids_and_unsupported_brokers(self):
+        calls = []
+        adapter = SimpleNamespace(cancel_order=lambda oid: calls.append(oid))
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca"}, adapter)):
+            self.assertEqual(self.client.delete("/api/orders/not-a-uuid").status_code, 400)
+            ok = self.client.delete("/api/orders/61e69015-8549-4bfd-b9c3-01e75843f47d")
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(calls, ["61e69015-8549-4bfd-b9c3-01e75843f47d"])
+        with patch("backend.main._active_connection", return_value=({"broker": "oanda"}, SimpleNamespace())):
+            self.assertEqual(self.client.delete("/api/orders/61e69015-8549-4bfd-b9c3-01e75843f47d").status_code, 501)
+
+    def test_close_position_validates_and_requires_live_phrase(self):
+        closed = []
+        held = [{"symbol": "AAPL", "side": "long", "quantity": 2.0, "current_price": 100.0, "unrealized_pl": 5.0}]
+        adapter = SimpleNamespace(positions=lambda: held, close_position=lambda s: closed.append(s) or {"order_id": "1", "status": "accepted"})
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "paper"}, adapter)):
+            self.assertEqual(self.client.delete("/api/positions/bad$symbol").status_code, 400)
+            self.assertEqual(self.client.delete("/api/positions/MSFT").status_code, 404)
+            self.assertEqual(self.client.delete("/api/positions/aapl").status_code, 200)
+        self.assertEqual(closed, ["AAPL"])
+        with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "live"}, adapter)):
+            self.assertEqual(self.client.delete("/api/positions/AAPL").status_code, 400)
+        self.assertEqual(closed, ["AAPL"])
+
     def test_order_with_levels_on_wrong_side_is_rejected(self):
         adapter = SimpleNamespace(
             place_order=lambda *a: {"order_id": "1"}, account=lambda: {"equity": 1000.0},

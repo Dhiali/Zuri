@@ -24,7 +24,7 @@ export type TradePlan = {
 
 type Message = { role: "user" | "assistant"; content: string };
 
-const opener = (symbol: string) => `Hi! What are you thinking about ${symbol || "trading"} today? Tell me your idea in your own words and we'll talk it through. I'll handle the lot size and stop placement.`;
+const opener = (symbol: string) => `Hi! What are you thinking about ${symbol || "trading"} today? Tell me your idea in your own words and we'll talk it through. If we agree a plan I can fill the ticket, and you press send. You can also just use the ticket yourself.`;
 
 export function TradeConversation({ token, symbol, riskPercent, ready, onUsePlan }: { token: string; symbol: string; riskPercent: number; ready: boolean; onUsePlan: (plan: TradePlan) => void }) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -74,7 +74,7 @@ export function TradeConversation({ token, symbol, riskPercent, ready, onUsePlan
     <section className="content-card trade-convo" data-zuri-target="trade-convo">
       <div className="trade-convo-zuri"><ZuriMascot mood={busy ? "talking" : "idle"} size={96} emote={emote} /></div>
       <div className="trade-convo-body">
-        <div><span className="small-label">TALK IT THROUGH WITH ZURI</span><h2>Brainstorm your trade</h2></div>
+        <div><span className="small-label">OPTIONAL · NEED HELP DECIDING?</span><h2>Talk your idea through with Zuri</h2></div>
         <div className="trade-convo-log" aria-live="polite">
           {shown.map((message, index) => <p key={index} className={message.role === "user" ? "convo-user" : "convo-zuri"}>{message.content}</p>)}
           {busy && <p className="convo-zuri convo-typing">Zuri is thinking…</p>}

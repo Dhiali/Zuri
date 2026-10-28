@@ -39,6 +39,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .live-dot, .chart-live i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px #48c9a055; }
 .strip-separator { color: #525b5c; }
 .market-open { margin-left: 5px; padding: 4px 7px; color: var(--green); background: #163128; border: 1px solid #24483d; border-radius: 3px; font-size: 9px; letter-spacing: .5px; }
+.market-clock { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 3px; font-size: 9px; letter-spacing: .5px; white-space: nowrap; }
+.market-clock i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.market-clock.open { color: var(--green); background: #163128; border: 1px solid #24483d; }
+.market-clock.closed { color: #e6b07f; background: #2b2118; border: 1px solid #4a3827; }
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 17px; }
 .icon-action, .rail-action { position: relative; border: 0; background: transparent; color: #a7b0b0; cursor: pointer; font-size: 19px; }
 .notification i { position: absolute; top: 2px; right: 0; height: 5px; width: 5px; border-radius: 50%; background: var(--red); }
@@ -446,7 +450,7 @@ td b { font-weight: 580; }
 @media (max-width: 620px) {
   .topbar { height: 52px; flex-basis: 52px; padding: 0 12px; gap: 12px; }
   .market-strip { font-size: 9px; }
-  .market-open, .strip-separator, .top-divider { display: none; }
+  .market-open, .strip-separator, .top-divider, .market-clock { display: none; }
   .topbar-right { gap: 9px; }
   .workspace { display: grid; grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
   .primary-nav { grid-row: 2; grid-column: 1; position: relative; z-index: 3; flex-direction: row; padding: 4px 5px; border-top: 1px solid var(--line); border-right: 0; }
@@ -1036,13 +1040,20 @@ td b { font-weight: 580; }
 }
 
 .snapshot-gallery { display: grid; gap: 16px; margin-top: 8px; }
-.snapshot-card { display: grid; gap: 12px; }
-.snapshot-chart { width: 100%; height: 300px; border-radius: 10px; overflow: hidden; }
-.snapshot-analysis { margin: 0; line-height: 1.5; }
-.snapshot-notes { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
-.snapshot-notes span { font-weight: 700; text-transform: capitalize; }
+.snapshot-gallery > .section-title { margin: 0; }
+.snapshot-card { display: grid; gap: 14px; padding: 18px 20px; }
+.snapshot-card > p { margin: 0; }
+.snapshot-card .journal-entry-heading { padding-bottom: 12px; border-bottom: 1px solid #2c3233; }
+.snapshot-card .journal-entry-heading h3 { display: flex; align-items: center; gap: 8px; margin: 5px 0 0; font-size: 18px; }
+.snapshot-card .journal-entry-actions { font-size: 12px; }
+.snapshot-chart { width: 100%; height: 340px; border: 1px solid #2c3233; border-radius: 10px; overflow: hidden; }
+.snapshot-analysis { margin: 0; padding: 12px 14px; border-left: 3px solid #b99aff; border-radius: 6px; background: #1b1824; color: #d7d2e4; font-size: 13px; line-height: 1.6; }
+.snapshot-notes { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 13px; line-height: 1.5; }
+.snapshot-notes li { padding: 9px 12px; border: 1px solid #2a3031; border-radius: 6px; background: #14181a; color: #c3cbc8; }
+.snapshot-notes span { margin-right: 6px; font-weight: 700; text-transform: capitalize; }
 .snapshot-practice { display: grid; gap: 10px; justify-items: start; }
-.snapshot-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.snapshot-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; border-top: 1px solid #2c3233; }
+.snapshot-actions .outline-button { min-height: 36px; font-size: 12px; }
 .snapshot-screen { width: 100%; border-radius: 10px; border: 1px solid #263043; }
 .screen-share-control { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 14px 16px; border: 1px dashed #263043; border-radius: 12px; }
 .screen-share-control p { margin: 4px 0 0; opacity: 0.75; font-size: 13px; }
@@ -1322,6 +1333,125 @@ td b { font-weight: 580; }
 .rail-empty h3 { margin: 0; font-size: 13px; }
 .rail-empty p { margin: 0; color: #8a9493; font-size: 11px; line-height: 1.5; }
 
+/* Trade page: self-serve ticket and first-trade coach */
+.trade-coach { display: grid; grid-template-columns: 76px 1fr; gap: 16px; align-items: start; margin-bottom: 14px; padding: 16px 18px; border: 1px solid #4a3d66; border-left: 3px solid #b99aff; background: #1b1824; }
+.trade-coach-body { min-width: 0; display: grid; gap: 8px; }
+.trade-coach-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.trade-coach h2 { margin: 0; color: #eee8f9; font-size: 18px; font-weight: 600; }
+.trade-coach p { margin: 0; color: #b4adc4; font-size: 12px; line-height: 1.55; }
+.trade-coach ol { margin: 2px 0 0; padding-left: 20px; color: #d2cde0; font-size: 12px; line-height: 1.7; }
+.trade-coach-note { padding: 8px 10px; border-radius: 5px; background: #262033; color: #d9c7f3 !important; }
+.trade-coach-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 6px; }
+.trade-coach-dots { display: flex; gap: 6px; }
+.trade-coach-dots i { width: 26px; height: 4px; border-radius: 2px; background: #35304a; }
+.trade-coach-dots i.done { background: #7a64ad; }
+.trade-coach-dots i.now { background: #b99aff; }
+.coach-done { border-left-color: #4ccf91; }
+.coach-reopen { margin-bottom: 10px; }
+.coach-focus { padding: 8px; border-radius: 6px; outline: 2px solid #b99aff; background: #211c2e; box-shadow: 0 0 0 4px #b99aff22; }
+.levels-helper { display: grid; gap: 6px; margin: 4px 0 10px; }
+.levels-helper small { color: #b9a9d6; font-size: 10px; line-height: 1.5; }
+@media (max-width: 700px) { .trade-coach { grid-template-columns: 1fr; } }
+
+/* Trade layout polish */
+.trade-view { display: grid; gap: 16px; align-content: start; }
+.trade-view > * { margin: 0; }
+.trade-intro { min-height: 0; padding: 4px 2px 0; }
+.trade-intro h2 { margin: 4px 0 2px; font-size: 24px; }
+.trade-intro p { font-size: 12px; }
+.trade-view .paper-tag { padding: 6px 10px; font-size: 10px; }
+.trade-account-row { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.trade-account-card { padding: 14px 16px; }
+.trade-account-card span { font-size: 11px; }
+.trade-account-card strong { margin-top: 6px; font-size: 20px; }
+.trade-layout { grid-template-columns: minmax(340px, 1.1fr) minmax(300px, 1fr); gap: 16px; align-items: start; }
+.trade-side { display: grid; gap: 16px; min-width: 0; }
+.order-card, .trade-context { padding: 20px; }
+.order-card .side-toggle button { height: 38px; font-size: 13px; }
+.order-card .field-label { font-size: 12px; margin-bottom: 14px; }
+.order-card .field-label input, .order-card .field-label select { min-height: 40px; font-size: 14px; }
+.order-card .field-row { gap: 12px; }
+.order-estimate { font-size: 12px; }
+.submit-order { height: 46px; font-size: 14px; }
+.disclaimer { font-size: 11px; }
+.trade-context .section-title h2 { font-size: 18px; }
+.snapshot-price { margin: 14px 0; font-size: 32px; }
+.snapshot-row, .snapshot-row b { font-size: 12px; }
+.trade-ai-note b { font-size: 12px; }
+.trade-ai-note p { font-size: 11px; }
+.coach-reopen { justify-self: start; }
+@media (max-width: 900px) { .trade-account-row { grid-template-columns: 1fr; } }
+
+/* History and Journal layout polish */
+.journal-view, .secondary-view:has(> .history-title) { display: grid; gap: 16px; align-content: start; }
+.journal-view > *, .secondary-view:has(> .history-title) > * { margin: 0; }
+.history-title, .journal-view-heading { min-height: 0; padding: 4px 2px 0; }
+.history-title h2, .journal-view-heading h2 { margin: 4px 0 2px; font-size: 24px; }
+.history-card { padding: 16px 20px; }
+.history-toolbar { padding-bottom: 14px; }
+.history-tab { min-height: 36px; padding: 0 14px; font-size: 12px; letter-spacing: .4px; }
+.history-filter { font-size: 12px; }
+.history-filter select { min-height: 34px; font-size: 12px; }
+.history-card table { font-size: 13px; }
+.history-card th { font-size: 11px; }
+.history-card th, .history-card td { padding: 12px 10px; }
+.history-summary { align-items: center; flex-wrap: wrap; gap: 8px 18px; padding: 0 4px; font-size: 12px; }
+.history-summary small { font-size: 11px; }
+.journal-insights { gap: 16px; }
+.journal-stat { padding: 14px 16px; }
+.journal-stat span { font-size: 12px; }
+.journal-stat strong { font-size: 18px; }
+.journal-report { padding: 16px 20px; }
+.journal-entry-list { gap: 14px; }
+.journal-entry { padding: 18px 20px; display: grid; gap: 4px; }
+.journal-entry h3 { font-size: 17px; }
+.journal-entry-actions { font-size: 12px; }
+.journal-entry > p { margin: 8px 0; font-size: 14px; }
+.journal-plan-values { gap: 28px; padding-top: 12px; font-size: 12px; }
+.journal-empty { padding: 32px; }
+
+/* Settings layout polish */
+.settings-view { display: grid; gap: 16px; align-content: start; }
+.settings-view > * { margin: 0; }
+.settings-footer { gap: 12px; }
+.settings-footer-card { padding: 14px 16px; min-width: 0; }
+.settings-footer-card span { font-size: 11px; letter-spacing: .6px; }
+.settings-footer-card strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.settings-layout { grid-template-columns: 190px minmax(0, 1fr); gap: 16px; align-items: start; }
+.settings-nav { position: sticky; top: 0; padding: 8px; border: 1px solid #2a2f31; border-radius: 10px; background: #14181a; }
+.settings-nav button { min-height: 40px; padding: 0 12px; font-size: 13px; }
+.settings-card { padding: 22px 24px; min-width: 0; }
+.settings-hero { padding: 16px 18px; }
+.settings-hero h3 { font-size: 20px; }
+.status-chip { padding: 5px 10px; font-size: 10px; }
+.account-stat-grid { gap: 12px; }
+.summary-card { padding: 14px 16px; }
+.summary-card span { font-size: 11px; }
+.summary-card strong { margin-top: 6px; font-size: 18px; }
+.settings-section + .settings-section { margin-top: 28px; padding-top: 22px; }
+.settings-section h3 { margin: 6px 0 10px; font-size: 17px; }
+.setting-row { min-height: 64px; padding: 10px 0; }
+.setting-row b { font-size: 14px; }
+.setting-row small { font-size: 12px; line-height: 1.5; }
+.setting-row select, .setting-row input[type="text"], .setting-row input[type="email"], .setting-row input[type="number"] { min-height: 38px; font-size: 13px; }
+.account-detail-value, .account-detail-static { font-size: 13px; }
+.account-edit-button { min-height: 36px; font-size: 12px; }
+.danger-button { min-height: 36px; font-size: 12px; }
+.account-danger-zone { padding: 18px; }
+.account-danger-zone p { font-size: 12px; }
+.account-delete-confirm label { font-size: 12px; }
+@media (max-width: 900px) { .settings-footer { grid-template-columns: 1fr; } .settings-nav { position: static; } }
+.journal-view-heading { align-items: center; padding: 0 2px; }
+.journal-insights { padding: 20px 22px; }
+.journal-insights > .section-title { align-items: center; margin: 0; }
+.journal-insights > .section-title h2 { margin: 4px 0 0; font-size: 20px; }
+.journal-insights > p.muted { margin: 0; color: #939d9b; font-size: 13px; line-height: 1.65; }
+.journal-auto-row { padding: 2px 0 6px; }
+.journal-auto-row .outline-button { min-height: 34px; font-size: 12px; }
+.auto-pill { padding: 6px 10px; font-size: 11px; }
+.journal-empty h3 { font-size: 19px; }
+.journal-empty p { font-size: 13px; }
+
 /* Charts layout polish */
 .content-column .chart-head { display: flex; align-items: center; flex-wrap: wrap; gap: 14px 22px; padding: 14px 16px; border: 1px solid var(--line); border-top: 2px solid #b99aff; border-radius: 6px; background: #171a1c; }
 .chart-head-symbol { display: flex; align-items: center; gap: 10px; min-width: 170px; }
@@ -1345,5 +1475,117 @@ td b { font-weight: 580; }
 .chart-research > div:not([hidden]) { display: contents; }
 .chart-research.dormant > div { display: none; }
 .chart-research .scanner-card { grid-column: 1 / -1; }
+
+/* Proportion fixes: roomier forms so larger text never truncates */
+.backtest-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+.backtest-fields .field-label { justify-content: flex-end; }
+.backtest-fields .field-label input, .backtest-fields .field-label select { min-height: 38px; padding: 0 10px; text-overflow: ellipsis; }
+.backtest-actions { flex-direction: column; align-items: stretch; gap: 10px; }
+.backtest-actions .solid-button { width: 100%; }
+.chart-research > .content-card, .chart-research > div > .content-card { padding: 20px; }
+.chart-research-heading { margin-bottom: 16px; }
+.chart-research-heading h2 { margin: 6px 0 4px; font-size: 18px; font-weight: 650; }
+.chart-research-heading p { max-width: 720px; }
+.scanner-builder { gap: 14px; }
+.scanner-builder .solid-button { min-width: 160px; margin-bottom: 13px; }
+.scanner-draft { padding: 14px; gap: 10px 16px; }
+.active-scanner { padding: 12px 2px; }
+.backtest-source, .backtest-disclaimer { line-height: 1.6; }
+.market-news-story { padding: 14px 0; }
+.market-news-heading h2 { font-size: 17px; }
+.market-news-tabs button { min-height: 32px; }
+.watch-symbol b { font-size: 12px; }
+.watch-price, .quote-price, .watch-change { font-size: 11px; }
 @media (max-width: 1100px) { .chart-research { grid-template-columns: 1fr; } }
+
+/* ===== Unified typography (keep this block last) =====
+   Scale: page title 26 · section heading 18 · sub heading 15 · body 13 · secondary 12 · label/caption 10-11 */
+body { font-size: 13px; }
+
+/* Headings: same size, weight and colour everywhere */
+.page-heading h1 { margin: 6px 0 0; color: #f4f6f5; font-size: 26px; font-weight: 650; letter-spacing: -.2px; line-height: 1.15; }
+.section-title h2, .watch-summary h2, .dashboard-greeting h2, .trade-intro h2, .history-title h2, .journal-view-heading h2,
+.journal-insights > .section-title h2, .market-news-heading h2, .chart-research-heading h2, .trade-context .section-title h2,
+.trade-coach h2, .settings-hero h3 { margin: 6px 0 0; color: #f1f4f3; font-size: 18px; font-weight: 650; letter-spacing: -.1px; line-height: 1.25; }
+.settings-section h3, .journal-entry h3, .journal-empty h3, .snapshot-card .journal-entry-heading h3, .rail-empty h3, .rail-head h2,
+.zuri-welcome-name { color: #eef1f0; font-size: 15px; font-weight: 620; line-height: 1.3; }
+.rail-head h2 { font-size: 15px; }
+
+/* Eyebrow / small labels */
+.eyebrow, .small-label { color: #8f9b9c; font-size: 10px; font-weight: 650; letter-spacing: .8px; text-transform: uppercase; }
+.rail-section-heading, .news-list-title { color: #8f9b9c; font-size: 10px; font-weight: 650; letter-spacing: .8px; }
+
+/* Body and secondary text */
+.dashboard-greeting p, .trade-intro p, .market-news-heading p, .chart-research-heading p, .journal-empty p, .rail-empty p,
+.ai-takeaway p, .advice-card p, .ai-overview-card p, .news-item p, .market-news-story > p, .market-news-state, .chart-research-notice,
+.auth-message, .auth-error, .account-danger-zone p, .setting-row small, .backtest-actions p, .backtest-disclaimer, .backtest-source,
+.disclaimer, .trade-ai-note p, .ai-foot, .ai-expanded, .history-summary, .history-summary small, .email-verified-hint { font-size: 12px; line-height: 1.6; }
+.journal-entry > p, .journal-empty p, .snapshot-analysis, .zuri-steps { font-size: 13px; }
+.muted { font-size: 12px; }
+
+/* Controls */
+.outline-button, .solid-button, .symbol-select, .text-action, .account-edit-button, .danger-button, .news-link { font-size: 12px; }
+.outline-button, .solid-button { min-height: 36px; padding: 0 14px; border-radius: 6px; font-weight: 600; }
+.text-action { font-weight: 600; }
+.field-label, .side-toggle button, .setting-row b, .account-detail-value, .account-detail-static, .auth-form > label { font-size: 12px; }
+.field-label input, .field-label select, .field-label textarea, .search-box input, .setting-row select, .history-filter select,
+.performance-card .section-title select, .journal-fields select, .journal-fields input, .journal-note-field textarea { font-size: 13px; }
+.search-box input::placeholder { font-size: 12px; }
+.time-button, .chart-icon-button, .indicator-button span, .lower-tab, .journal-capture-button, .journal-plan-button, .journal-saved-button,
+.settings-nav button, .history-tab, .market-news-tabs button, .market-news-actions button, .market-news-actions a { font-size: 12px; font-weight: 560; }
+.nav-item { font-size: 11px; font-weight: 560; }
+.market-strip, .market-open, .market-clock, .topbar-email, .signout-button, .statusbar, .statusbar b { font-size: 11px; }
+.paper-tag, .status-chip, .side-pill, .status-pill, .auto-pill, .market-news-tag, .exchange-tag, .ai-badge, .confidence, .chart-live,
+.ai-overview-status, .count { font-size: 10px; font-weight: 620; }
+.side-pill, .status-pill { padding: 3px 7px; }
+
+/* Tables */
+th { padding: 10px 10px; color: #8f9b9c; font-size: 10px; font-weight: 650; letter-spacing: .6px; text-transform: uppercase; }
+td { height: 44px; font-size: 12px; }
+
+/* Cards, metrics and numbers */
+.metric-card > span, .trade-account-card span, .summary-card span, .settings-footer-card span, .ai-metric span, .journal-stat span,
+.performance-total span, .backtest-metrics span, .advice-stat, .advice-stat i, .snapshot-row, .metric-card small, .pulse-row .muted,
+.dashboard-view .metric-card small { color: #8f9b9c; font-size: 11px; }
+.ai-metric strong, .pulse-row strong, .snapshot-row b, .metric-card strong { font-size: 14px; font-weight: 620; }
+.pulse-row, .pulse-row strong small, .pulse-row .positive, .ohlc, .chart-labels, .chart-footer, .performance-dates, .ai-overview-foot,
+.advice-card > small, .journal-plan-values, .journal-entry-actions, .journal-capture-footer { font-size: 11px; }
+.market-summary small { font-size: 11px; }
+
+/* Quotes rail */
+.rail-count, .watchlist-columns, .watch-symbol small, .search-box kbd { font-size: 10px; }
+.watch-symbol b { font-size: 12px; font-weight: 620; }
+.watch-price, .quote-price, .watch-change { font-size: 10px; }
+.watch-icon { font-size: 10px; }
+
+/* News */
+.news-source, .market-news-meta, .market-news-source, .market-news-warning, .market-news-footer, .market-news-disclaimer, .aura-news-context > span { font-size: 10px; }
+.news-link, .market-news-title-link, .aura-news-context a { font-size: 13px; font-weight: 600; line-height: 1.45; }
+
+/* Floating Zuri assistant */
+.aura-message p, .aura-compose textarea, .aura-suggestions button, .aura-chip, .aura-action button, .aura-trade input, .aura-nudge-body span { font-size: 12px; }
+.aura-panel-title small, .aura-context, .aura-typing, .aura-error, .aura-disclaimer, .aura-access, .aura-share, .aura-trade small, .aura-access small { font-size: 11px; }
+
+/* Charts research and Trade */
+.scanner-draft span, .scanner-draft small, .active-scanner span, .active-scanner small, .scanner-toast, .snapshot-actions .outline-button { font-size: 11px; }
+.scanner-draft b, .active-scanner b, .scanner-builder textarea { font-size: 13px; }
+.order-estimate, .trade-ai-note b, .history-filter, .journal-capture-footer { font-size: 12px; }
+.chart-welcome-name small, .chart-welcome-quote small, .chart-welcome-add { font-size: 12px; }
+
+/* Keep the roomier sizes on the Trade, History, Journal and Settings pages */
+.settings-view .setting-row b, .settings-view .account-detail-value, .settings-view .account-detail-static, .settings-view .account-edit-button, .settings-view .danger-button, .settings-nav button { font-size: 13px; }
+.settings-view .setting-row small, .settings-view .account-danger-zone p, .settings-view .account-delete-confirm label { font-size: 12px; }
+.settings-view .setting-row select, .settings-view .setting-row input[type="text"], .settings-view .setting-row input[type="email"], .settings-view .setting-row input[type="number"] { font-size: 13px; }
+.settings-view .summary-card span, .settings-view .settings-footer-card span { font-size: 11px; }
+.settings-view .summary-card strong, .settings-view .settings-footer-card strong { font-size: 16px; }
+.history-card td, .history-card table { font-size: 13px; }
+.history-card th { font-size: 11px; }
+.history-tab, .history-filter, .history-filter select, .history-summary { font-size: 12px; }
+.journal-view .journal-entry > p { font-size: 14px; }
+.journal-view .journal-entry-actions, .journal-view .journal-plan-values { font-size: 12px; }
+.journal-view .journal-stat span { font-size: 12px; }
+.trade-view .field-label, .trade-view .order-estimate { font-size: 12px; }
+.trade-view .field-label input, .trade-view .field-label select { font-size: 14px; }
+.trade-view .trade-account-card span { font-size: 11px; }
+.trade-view .snapshot-row, .trade-view .snapshot-row b { font-size: 12px; }
 
