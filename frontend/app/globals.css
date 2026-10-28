@@ -1722,3 +1722,7 @@ td { height: 44px; font-size: 12px; }
 .journal-view .journal-empty { grid-column: 1 / -1; }
 @media (max-width: 1100px) { .journal-view .journal-entry-list { grid-template-columns: 1fr; } }
 
+/* Closed-market warning above the order confirmation */
+.market-warning { display: grid; gap: 4px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid #6b5a2b; border-left: 3px solid #e0b64a; border-radius: 6px; background: #2a2412; color: #e8d9a8; font-size: 12px; line-height: 1.5; }
+.market-warning strong { color: #f3cf6b; font-size: 12px; }
+

@@ -1371,9 +1371,11 @@ def get_open_positions(broker: str | None = Query(default=None), user: dict = De
 
 
 @app.get("/api/market-status")
-def get_market_status(user: dict = Depends(require_authenticated_user)):
+def get_market_status(symbol: str | None = Query(default=None, pattern=r"^[A-Za-z0-9_./-]{1,20}$"), user: dict = Depends(require_authenticated_user)):
     """Whether the linked broker's market is open. Only brokers with a trading clock report it; others return available=false."""
     row, adapter = _active_connection(user["id"])
+    if symbol and brokers.always_open(row["broker"], symbol):
+        return {"available": True, "broker": row["broker"], "is_open": True, "next_open": None, "next_close": None, "queues": False, "market": "Crypto market", "always_open": True}
     if not hasattr(adapter, "market_clock"):
         return {"available": False, "broker": row["broker"]}
     return {"available": True, "broker": row["broker"], **adapter.market_clock()}
@@ -1390,7 +1392,7 @@ def get_open_orders(broker: str | None = Query(default=None), user: dict = Depen
 @app.delete("/api/orders/{order_id}")
 def cancel_open_order(order_id: str, broker: str | None = Query(default=None), user: dict = Depends(require_authenticated_user)):
     """Cancels one waiting order. Only orders that belong to the user's own linked account can be reached."""
-    if not UUID_RE.fullmatch(order_id):
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", order_id):
         raise HTTPException(status_code=400, detail="Invalid order id.")
     _, adapter = _active_connection(user["id"], broker)
     if not hasattr(adapter, "cancel_order"):
@@ -1411,11 +1413,12 @@ def close_one_position(
     if not re.fullmatch(r"[A-Z0-9._-]{1,20}", symbol):
         raise HTTPException(status_code=400, detail="Invalid symbol.")
     row, adapter = _active_connection(user["id"], broker)
+    symbol = brokers.normalize_symbol(row["broker"], symbol)
     if not hasattr(adapter, "close_position"):
         raise HTTPException(status_code=501, detail="Closing a single position is not supported for this broker yet.")
     if row["environment"] == "live" and confirmation_phrase != LIVE_CONFIRMATION_PHRASE:
         raise HTTPException(status_code=400, detail=f'Closing a live position requires typing "{LIVE_CONFIRMATION_PHRASE}".')
-    held = next((p for p in adapter.positions() if str(p.get("symbol") or "").upper() == symbol), None)
+    held = next((p for p in adapter.positions() if brokers.same_symbol(p.get("symbol"), symbol)), None)
     if held is None:
         raise HTTPException(status_code=404, detail="You no longer hold that position. It may already be closed.")
     result = adapter.close_position(symbol)
@@ -1711,7 +1714,7 @@ def _block_category(detail: str) -> str:
 @app.post("/api/brokers/{broker}/orders")
 def place_broker_order(broker: str, request: BrokerOrderRequest, user: dict = Depends(require_authenticated_user)):
     row, adapter = _load_connection(user["id"], broker)
-    symbol = request.symbol.upper()
+    symbol = brokers.normalize_symbol(broker, request.symbol.upper())
     context: dict = {}
     stop_loss = take_profit = None
     try:
@@ -1737,6 +1740,11 @@ def place_broker_order(broker: str, request: BrokerOrderRequest, user: dict = De
             })
         raise
     result = adapter.place_order(symbol, request.side, request.quantity, stop_loss, take_profit)
+    if "market_open" not in result and hasattr(adapter, "market_clock"):
+        try:
+            result["market_open"] = bool(adapter.market_clock().get("is_open"))
+        except HTTPException:
+            pass
     logger.info("User %s placed %s %s order on %s (%s).", user["id"], request.side, request.symbol, broker, row["environment"])
     _capture_trade(user["id"], "order_placed", symbol, request.side, request.quantity, broker, row["environment"], context, adapter=adapter)
     return {"environment": row["environment"], **result}
@@ -1752,6 +1760,7 @@ class TradeConverseRequest(BaseModel):
 
 
 def _build_trade_plan(adapter, broker: str, symbol: str, side: str, risk_percent: float, equity: float, buying_power: float | None, currency: str | None, stop: float | None, target: float | None) -> dict:
+    symbol = brokers.normalize_symbol(broker, symbol)
     brokers.check_symbol_supported(broker, symbol)
     price = adapter.price(symbol)
     try:
@@ -1774,9 +1783,9 @@ def _build_trade_plan(adapter, broker: str, symbol: str, side: str, risk_percent
         warnings.append(f"Risk was capped at {MAX_RISK_PERCENTAGE_CAP}% of your account.")
     if forex and currency and not symbol.upper().endswith(f"_{currency.upper()}"):
         warnings.append("This pair is not quoted in your account currency, so the risk amount is approximate.")
-    stops_supported = broker != "tradier"
+    stops_supported = brokers.supports_attached_stops(broker, symbol) if broker != "tradier" else False
     if not stops_supported:
-        warnings.append("Your broker connection cannot attach a stop automatically yet. Set it manually with your broker.")
+        warnings.append("Alpaca can't attach a stop to crypto orders. Watch the trade yourself." if broker == "alpaca" else "Your broker connection cannot attach a stop automatically yet. Set it manually with your broker.")
     reward = abs(target - price)
     return {
         **sized,
@@ -1945,7 +1954,7 @@ def _pre_trade_context(adapter, symbol: str, side: str) -> dict:
         context["equity"] = adapter.account().get("equity")
         price = adapter.price(symbol)
         context["price"] = price
-        held = next((p for p in adapter.positions() if str(p["symbol"]).upper() == symbol), None)
+        held = next((p for p in adapter.positions() if brokers.same_symbol(p["symbol"], symbol)), None)
         if held and held.get("quantity"):
             held_long = (held.get("side") or "long") == "long"
             if (side == "sell") == held_long:

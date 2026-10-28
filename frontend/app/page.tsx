@@ -8,7 +8,7 @@ import { HistoryView } from "./history-view";
 import { CoachingPanel } from "./dashboard-insights";
 import { TradeConversation } from "./trade-conversation";
 import { FirstTradeCoach } from "./trade-coach";
-import { MarketClock } from "./market-clock";
+import { MarketClock, formatOpenTime, useMarketStatus } from "./market-clock";
 import { PendingOrders } from "./pending-orders";
 import { SnapshotGallery, captureScreenForTrade } from "./trade-snapshots";
 import { ChartResearch } from "./chart-research";
@@ -590,11 +590,12 @@ function TradingWorkspace() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({ symbol: orderSymbol, side, quantity, confirmed: true, confirmation_phrase: phrase, ...(stop !== undefined && target !== undefined ? { stop_loss: stop, take_profit: target } : {}) }),
     });
-    const body = await response.json().catch(() => ({})) as { detail?: unknown; status?: string };
+    const body = await response.json().catch(() => ({})) as { detail?: unknown; status?: string; market_open?: boolean; next_open?: string | null; warnings?: string[] };
     if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The order was rejected.");
     linkedAccount.refresh();
     captureScreenForTrade(accessToken, orderSymbol, reloadJournal);
-    return `${linkedAccount.data.environment === "live" ? "LIVE" : "Paper"} order sent: ${body.status ?? "submitted"}.`;
+    const waiting = body.market_open === false && body.status !== "filled" ? ` The market is closed, so it will wait${body.next_open ? ` and fill after it opens (${formatOpenTime(body.next_open)} your time)` : " until it opens"}.` : "";
+    return `${linkedAccount.data.environment === "live" ? "LIVE" : "Paper"} order sent: ${body.status ?? "submitted"}.${waiting}${Array.isArray(body.warnings) ? ` ${body.warnings.join(" ")}` : ""}`;
   };
 
   const CHART_STEP_TARGETS = ["chart-timeframes", "chart-panel", "journal-actions", "ai-takeaway", "news-charts", "chart-scanners", "chart-backtest", "chart-backtest-history"];
@@ -1364,6 +1365,11 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
   const [livePhrase, setLivePhrase] = useState("");
   const [orderBusy, setOrderBusy] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
+  const marketStatus = useMarketStatus(token, Boolean(linked.data), orderSymbol);
+  const marketClosed = Boolean(marketStatus?.available && marketStatus.is_open === false);
+  const marketQueues = marketStatus?.queues !== false;
+  const marketName = marketStatus?.market ?? "market";
+  const reopens = formatOpenTime(marketStatus?.next_open);
   const [orderError, setOrderError] = useState("");
   const [coachOn, setCoachOn] = useState(() => typeof window !== "undefined" && window.localStorage.getItem("zuri-first-trade-coach") !== "done");
   const [coachStep, setCoachStep] = useState(() => (typeof window !== "undefined" ? Number(window.localStorage.getItem("zuri-first-trade-step")) || 0 : 0));
@@ -1390,7 +1396,7 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       const response = await fetch(`${backendUrl}/api/positions/${encodeURIComponent(position.symbol)}?broker=${linked.data.broker}${query}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The position could not be closed.");
-      setCloseMessage(`Closing order sent for ${position.symbol}. If the market is closed, Alpaca will close it at the next open and it will wait under Pending orders.`);
+      setCloseMessage(`Closing order sent for ${position.symbol}. If the market is closed, your broker may hold it until the next open and it can wait under Pending orders.`);
       setOrdersRefresh((value) => value + 1);
       linked.refresh();
       onTraded();
@@ -1484,8 +1490,9 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The order was rejected.");
       const filled = body.status === "filled";
-      const closedNote = body.market_open === false && !filled ? ` The US stock market is closed right now, so Alpaca is holding this order and will fill it when the market opens${body.next_open ? ` (${new Date(body.next_open).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })} your time)` : ""}. It won't show as a position until then. Check History > Orders to see it waiting.` : "";
-      setOrderMessage(`${isLive ? "LIVE" : "Paper"} order ${filled ? "filled" : "accepted"}: ${body.status ?? "submitted"}.${closedNote}`);
+      const closedNote = body.market_open === false && !filled ? ` The ${marketName.toLowerCase()} is closed right now, so your broker is holding this order and will fill it when the market opens${body.next_open ? ` (${formatOpenTime(body.next_open)} your time)` : ""}. It won't show as a position until then. Check History > Orders to see it waiting.` : "";
+      const notes = Array.isArray(body.warnings) ? ` ${body.warnings.join(" ")}` : "";
+      setOrderMessage(`${isLive ? "LIVE" : "Paper"} order ${filled ? "filled" : "accepted"}: ${body.status ?? "submitted"}.${closedNote}${notes}`);
       if (showCoach) setCoachPlaced(true);
       setOrdersRefresh((value) => value + 1);
       setConfirmed(false);
@@ -1535,7 +1542,8 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
           <div className="levels-helper"><button type="button" className="outline-button" disabled={levelsBusy || !linked.data || !orderSymbol.trim()} onClick={() => void askZuriForLevels()}>{levelsBusy ? "Zuri is checking…" : "✦ Ask Zuri to fill the stop loss and take profit"}</button>{levelsNote && <small role="status">{levelsNote}</small>}</div>
           <div className="order-estimate"><span>Estimated value</span><b>{formatCurrency(validOrder ? estimatedValue : 0)}</b><span>Buying power after order</span><b>{formatCurrency(buyingPowerAfter)}</b></div>
           {isLive && <label className="field-label">Type CONFIRM LIVE to place a real-money order<input value={livePhrase} onChange={(event) => setLivePhrase(event.target.value)} autoComplete="off"/></label>}
-          <label className={`field-label${focusClass(4)}`}><span><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}/> I confirm this {isLive ? "LIVE" : "paper"} market order</span></label>
+          {marketClosed && <div className="market-warning" role="alert"><strong>{marketName} is closed{reopens ? ` · reopens ${reopens} (your time)` : ""}</strong><span>{marketQueues ? "Your broker will hold this order and fill it at the next open, possibly at a very different price from now. It won't appear as a position until then." : "Your broker will probably reject this order while the market is closed. Try again when it reopens."}</span></div>}
+          <label className={`field-label${focusClass(4)}`}><span><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}/> {marketClosed && marketQueues ? `I understand the market is closed and this ${isLive ? "LIVE" : "paper"} order will queue until it opens` : `I confirm this ${isLive ? "LIVE" : "paper"} market order`}</span></label>
           {orderError && <p className="auth-error" role="alert">{orderError}</p>}
           {orderMessage && <p className="auth-message" role="status">{orderMessage}</p>}
           <button className={orderSide === "Buy" ? "submit-order buy-submit" : "submit-order sell-submit"} disabled={!validOrder || !linked.data || !confirmed || orderBusy || (isLive && livePhrase !== "CONFIRM LIVE")} onClick={() => void submitOrder()}>{orderBusy ? "Sending…" : `${orderSide} ${orderSymbol || "—"}`}</button><small className="disclaimer">{isLive ? "This sends a real order to your live broker account." : "Paper order only. No real funds will be used."}</small>
@@ -1561,8 +1569,8 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       }} />
         </div>
       </div>
-      <PendingOrders token={token} enabled={linked.data?.broker === "alpaca"} refreshKey={ordersRefresh} />
-      <section className="content-card positions-card"><div className="section-title"><div><span className="small-label">PORTFOLIO</span><h2>Open positions</h2></div><span className="muted">{linked.data ? `${linked.data.positions.length} positions` : "No broker linked"}</span></div>{linked.data ? <><PositionsTable positions={linked.data.positions} currency={linked.data.account.currency} onClose={linked.data.broker === "alpaca" ? (position) => void closePosition(position) : undefined} closing={closingSymbol} />{closeMessage && <p className="auth-message" role="status">{closeMessage}</p>}{closeError && <p className="auth-error" role="alert">{closeError}</p>}</> : <p className="muted">Link a broker in Settings → Broker to see your positions.</p>}</section>
+      <PendingOrders token={token} enabled={Boolean(linked.data)} refreshKey={ordersRefresh} />
+      <section className="content-card positions-card"><div className="section-title"><div><span className="small-label">PORTFOLIO</span><h2>Open positions</h2></div><span className="muted">{linked.data ? `${linked.data.positions.length} positions` : "No broker linked"}</span></div>{linked.data ? <><PositionsTable positions={linked.data.positions} currency={linked.data.account.currency} onClose={(position) => void closePosition(position)} closing={closingSymbol} />{closeMessage && <p className="auth-message" role="status">{closeMessage}</p>}{closeError && <p className="auth-error" role="alert">{closeError}</p>}</> : <p className="muted">Link a broker in Settings → Broker to see your positions.</p>}</section>
     </div>
   );
 }

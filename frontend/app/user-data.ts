@@ -308,3 +308,24 @@ export async function saveWatchlist(userId: string, symbols: string[]) {
   const { error } = await requireSupabase().rpc("set_my_watchlist", { p_symbols: symbols });
   if (error) throw new Error(`Unable to update your watchlist: ${error.message}`);
 }
+
+export type ResearchKind = "scanners" | "backtests";
+
+// Returns null when this account has nothing saved yet; throws if the table is unavailable so callers can fall back to this browser.
+export async function loadResearchState(userId: string, kind: ResearchKind): Promise<unknown[] | null> {
+  const { data, error } = await requireSupabase()
+    .from("research_state")
+    .select("items")
+    .eq("user_id", userId)
+    .eq("kind", kind)
+    .maybeSingle();
+  if (error) throw new Error(`Unable to load your saved ${kind}: ${error.message}`);
+  return data && Array.isArray(data.items) ? data.items : null;
+}
+
+export async function saveResearchState(userId: string, kind: ResearchKind, items: unknown[]) {
+  const { error } = await requireSupabase()
+    .from("research_state")
+    .upsert({ user_id: userId, kind, items, updated_at: new Date().toISOString() }, { onConflict: "user_id,kind" });
+  if (error) throw new Error(`Unable to save your ${kind}: ${error.message}`);
+}

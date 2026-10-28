@@ -212,11 +212,11 @@ FREE_COURSES = {
     "Forex": [_course("Forex trading basics and strategies", "BabyPips", "https://www.babypips.com/learn/forex", "Course", "Built around currency pairs.")],
     "Stocks": [_course("Trading and investing learning center", "Fidelity", "https://www.fidelity.com/learning-center/trading-investing", "Course", "Free articles and videos on stocks and options.")],
     "Crypto": [
-        _course("Binance Academy", "Binance", "https://academy.binance.com/en", "Course", "Free crypto trading and security guides."),
+        _course("Binance Academy", "Binance", "https://www.binance.com/en/academy", "Course", "Free crypto trading and security guides."),
         _course("Coinbase Learn", "Coinbase", "https://www.coinbase.com/learn", "Course", "Beginner crypto lessons."),
     ],
-    "Commodities": [_course("CME Group education", "CME Group", "https://www.cmegroup.com/education.html", "Course", "Free courses on futures, gold and energy markets.")],
-    "tradingview": [_course("TradingView education", "TradingView", "https://www.tradingview.com/education/", "Videos", "Chart reading and strategy ideas from other traders.")],
+    "Commodities": [_course("CME Group education", "CME Group", "https://www.cmegroup.com/education", "Course", "Free courses on futures, gold and energy markets.")],
+    "tradingview": [_course("TradingView trade ideas", "TradingView", "https://www.tradingview.com/ideas/", "Videos", "Chart reading and strategy ideas from other traders.")],
 }
 
 EXPERIENCE_TOPICS = {

@@ -719,6 +719,112 @@ class ChartResearchTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
     @patch("backend.brokers._request")
+    def test_alpaca_crypto_uses_pair_gtc_and_warns_about_stops(self, request):
+        from backend.brokers import AlpacaAdapter
+
+        request.return_value = {"id": "abc", "status": "accepted"}
+        adapter = AlpacaAdapter({"api_key": "k", "api_secret": "s"}, "paper")
+        result = adapter.place_order("BTCUSD", "buy", 0.01, 90000, 110000)
+
+        payload = request.call_args.kwargs["json"]
+        self.assertEqual((payload["symbol"], payload["time_in_force"]), ("BTC/USD", "gtc"))
+        self.assertNotIn("order_class", payload)
+        self.assertTrue(result["market_open"])
+        self.assertEqual(len(result["warnings"]), 1)
+
+    @patch("backend.brokers._request")
+    def test_alpaca_crypto_price_and_bars_use_crypto_endpoints(self, request):
+        from datetime import datetime, timezone
+        from backend.brokers import AlpacaAdapter
+
+        adapter = AlpacaAdapter({"api_key": "k", "api_secret": "s"}, "paper")
+        request.return_value = {"trades": {"BTC/USD": {"p": 64000.5}}}
+        self.assertEqual(adapter.price("BTCUSD"), 64000.5)
+        request.return_value = {"bars": {"BTC/USD": [{"t": "2026-01-01T00:00:00Z", "o": 1, "h": 2, "l": 0.5, "c": 1.5}]}, "next_page_token": None}
+        result = adapter.historical_candles("BTC/USD", "1h", datetime(2026, 1, 1, tzinfo=timezone.utc), datetime(2026, 1, 2, tzinfo=timezone.utc))
+        self.assertEqual(result[0]["c"], 1.5)
+        self.assertIn("crypto", request.call_args.args[1])
+
+    def test_symbol_helpers(self):
+        from backend import brokers
+
+        self.assertEqual(brokers.normalize_symbol("oanda", "eurusd"), "EUR_USD")
+        self.assertEqual(brokers.normalize_symbol("oanda", "GOLD"), "XAU_USD")
+        self.assertEqual(brokers.normalize_symbol("alpaca", "btc/usd"), "BTCUSD")
+        self.assertEqual(brokers.normalize_symbol("alpaca", "AAPL"), "AAPL")
+        self.assertTrue(brokers.same_symbol("EUR_USD", "EURUSD"))
+        self.assertTrue(brokers.always_open("alpaca", "ETHUSD"))
+        self.assertFalse(brokers.always_open("alpaca", "AAPL"))
+        with self.assertRaises(Exception):
+            brokers.check_symbol_supported("alpaca", "EURUSD")
+        with self.assertRaises(Exception):
+            brokers.check_symbol_supported("tradier", "BTCUSD")
+        brokers.check_symbol_supported("alpaca", "BTCUSD")
+
+    @patch("backend.brokers._request")
+    def test_oanda_cancelled_market_order_is_reported_not_submitted(self, request):
+        from fastapi import HTTPException
+        from backend.brokers import OandaAdapter
+
+        request.return_value = {"orderCancelTransaction": {"reason": "MARKET_HALTED"}}
+        adapter = OandaAdapter({"api_token": "t", "account_id": "1"}, "paper")
+        with self.assertRaises(HTTPException) as caught:
+            adapter.place_order("EURUSD", "buy", 1000)
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertIn("closed", caught.exception.detail)
+        self.assertEqual(request.call_args.kwargs["json"]["order"]["instrument"], "EUR_USD")
+
+    @patch("backend.brokers._request")
+    def test_oanda_clock_and_pending_orders(self, request):
+        from backend.brokers import OandaAdapter
+
+        adapter = OandaAdapter({"api_token": "t", "account_id": "1"}, "paper")
+        request.return_value = {"prices": [{"tradeable": False}]}
+        clock = adapter.market_clock()
+        self.assertFalse(clock["is_open"])
+        self.assertIsNotNone(clock["next_open"])
+        request.return_value = {"orders": [
+            {"id": "7", "type": "LIMIT", "instrument": "EUR_USD", "units": "-1000", "createTime": "2026-01-01T00:00:00.123456789Z"},
+            {"id": "8", "type": "STOP_LOSS", "instrument": "EUR_USD", "units": "-1000"},
+        ]}
+        orders = adapter.open_orders()
+        self.assertEqual([(o["id"], o["side"], o["submitted_at"]) for o in orders], [("7", "sell", "2026-01-01T00:00:00.123Z")])
+
+    @patch("backend.brokers._action_request")
+    @patch("backend.brokers._request")
+    def test_oanda_close_position_closes_the_held_side(self, request, action):
+        from backend.brokers import OandaAdapter
+
+        request.return_value = {"positions": [{"instrument": "EUR_USD", "long": {"units": "0"}, "short": {"units": "-500", "averagePrice": "1.1"}, "unrealizedPL": "2"}]}
+        action.return_value = {"shortOrderFillTransaction": {"id": "99"}}
+        result = OandaAdapter({"api_token": "t", "account_id": "1"}, "paper").close_position("EURUSD")
+        self.assertEqual(action.call_args.kwargs["json"], {"shortUnits": "ALL"})
+        self.assertTrue(action.call_args.args[1].endswith("/positions/EUR_USD/close"))
+        self.assertEqual(result, {"order_id": "99", "status": "filled"})
+
+    @patch("backend.brokers._action_request")
+    @patch("backend.brokers._request")
+    def test_tradier_orders_clock_cancel_and_close(self, request, action):
+        from backend.brokers import TradierAdapter
+
+        adapter = TradierAdapter({"access_token": "t", "account_id": "A1"}, "paper")
+        request.return_value = {"orders": {"order": [
+            {"id": 5, "symbol": "AAPL", "quantity": 3, "side": "buy", "type": "limit", "status": "open", "class": "equity"},
+            {"id": 6, "symbol": "AAPL", "quantity": 3, "side": "buy", "type": "market", "status": "filled"},
+        ]}}
+        self.assertEqual([o["id"] for o in adapter.open_orders()], ["5"])
+        request.return_value = {"clock": {"state": "closed", "date": "2099-01-05", "next_change": "09:30", "next_state": "open"}}
+        clock = adapter.market_clock()
+        self.assertFalse(clock["is_open"])
+        self.assertEqual(clock["next_open"], "2099-01-05T14:30:00Z")
+        adapter.cancel_order("5")
+        self.assertEqual(action.call_args.args[0], "DELETE")
+        with patch.object(TradierAdapter, "positions", return_value=[{"symbol": "AAPL", "quantity": 3, "side": "short"}]):
+            request.return_value = {"order": {"id": 9, "status": "pending"}}
+            adapter.close_position("aapl")
+        self.assertEqual(request.call_args.kwargs["data"]["side"], "buy_to_cover")
+
+    @patch("backend.brokers._request")
     def test_alpaca_aggregates_historical_hourly_bars_for_four_hour_reviews(self, request):
         from datetime import datetime, timezone
         from backend.brokers import AlpacaAdapter
@@ -904,10 +1010,12 @@ class ChartResearchTests(unittest.TestCase):
         calls = []
         adapter = SimpleNamespace(cancel_order=lambda oid: calls.append(oid))
         with patch("backend.main._active_connection", return_value=({"broker": "alpaca"}, adapter)):
-            self.assertEqual(self.client.delete("/api/orders/not-a-uuid").status_code, 400)
+            self.assertEqual(self.client.delete("/api/orders/bad%20id!").status_code, 400)
+            numeric = self.client.delete("/api/orders/12345")
             ok = self.client.delete("/api/orders/61e69015-8549-4bfd-b9c3-01e75843f47d")
+        self.assertEqual(numeric.status_code, 200)
         self.assertEqual(ok.status_code, 200)
-        self.assertEqual(calls, ["61e69015-8549-4bfd-b9c3-01e75843f47d"])
+        self.assertEqual(calls, ["12345", "61e69015-8549-4bfd-b9c3-01e75843f47d"])
         with patch("backend.main._active_connection", return_value=({"broker": "oanda"}, SimpleNamespace())):
             self.assertEqual(self.client.delete("/api/orders/61e69015-8549-4bfd-b9c3-01e75843f47d").status_code, 501)
 
@@ -1022,7 +1130,7 @@ class CoachingTests(unittest.TestCase):
         newbie = coaching.learning_for(["Crypto"], "New to trading")
         urls = [c["url"] for c in newbie["courses"]]
         self.assertIn("https://www.babypips.com/learn/forex", urls)
-        self.assertIn("https://academy.binance.com/en", urls)
+        self.assertIn("https://www.binance.com/en/academy", urls)
         self.assertEqual(len(urls), len(set(urls)))
         pro = coaching.learning_for(["Forex"], "Experienced", ["psychology"])
         self.assertNotIn("https://www.khanacademy.org/economics-finance-domain/core-finance/stock-and-bonds", [c["url"] for c in pro["courses"]])

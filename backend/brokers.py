@@ -1,13 +1,18 @@
 ﻿import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException
 
 TIMEOUT = 10
+NEW_YORK = ZoneInfo("America/New_York")
+CRYPTO_BARS_URL = "https://data.alpaca.markets/v1beta3/crypto/us/bars"
+CRYPTO_TRADES_URL = "https://data.alpaca.markets/v1beta3/crypto/us/latest/trades"
 
 BROKERS: dict[str, dict[str, Any]] = {
     "alpaca": {
@@ -58,6 +63,14 @@ def _request(method: str, url: str, **kwargs):
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail="The broker could not be reached. Please try again.") from e
     if response.status_code in (401, 403):
+        # Brokers also use 403 for real order problems (for example not enough buying power), so only generic auth messages mean bad keys.
+        message = ""
+        try:
+            message = str(response.json().get("message") or "")
+        except (ValueError, AttributeError):
+            pass
+        if response.status_code == 403 and message.strip(" .").lower() not in {"", "forbidden", "unauthorized", "not authorized"}:
+            raise HTTPException(status_code=400, detail=f"The broker refused this: {message}")
         raise HTTPException(status_code=400, detail="The broker rejected these credentials.")
     if response.status_code >= 400:
         try:
@@ -71,11 +84,108 @@ def _request(method: str, url: str, **kwargs):
         raise HTTPException(status_code=502, detail="The broker returned an invalid response.") from e
 
 
+def _action_request(method: str, url: str, *, not_found: str, conflict: str | None = None, conflict_codes: tuple[int, ...] = (409, 422), **kwargs):
+    """For cancel and close calls, where the broker's status code says whether the order or position still exists."""
+    try:
+        response = requests.request(method, url, timeout=TIMEOUT, **kwargs)
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail="The broker could not be reached. Please try again.") from e
+    if response.status_code in (401, 403):
+        raise HTTPException(status_code=400, detail="The broker rejected these credentials.")
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail=not_found)
+    if conflict and response.status_code in conflict_codes:
+        raise HTTPException(status_code=409, detail=conflict)
+    if response.status_code >= 400:
+        try:
+            body = response.json()
+            detail = body.get("message") or body.get("errorMessage")
+        except (ValueError, AttributeError):
+            detail = None
+        raise HTTPException(status_code=502, detail=f"Broker error: {detail or response.status_code}")
+    try:
+        return response.json()
+    except ValueError:
+        return {}
+
+
 def _num(value: Any) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _iso(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _trim_time(value: str | None) -> str | None:
+    """OANDA timestamps carry nanoseconds, which not every browser can parse."""
+    return re.sub(r"(\.\d{3})\d+", r"\1", value) if value else value
+
+
+CRYPTO_BASES = {"BTC", "ETH", "SOL", "LTC", "DOGE", "AVAX", "LINK", "BCH", "UNI", "AAVE", "DOT", "XRP", "SHIB", "XTZ", "YFI", "MKR", "CRV", "GRT", "SUSHI", "BAT", "PEPE", "TRUMP"}
+CRYPTO_QUOTES = ("USDT", "USDC", "USD")
+FOREX_CODES = {"EUR", "USD", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "SEK", "NOK", "SGD", "HKD", "MXN", "ZAR", "TRY", "XAU", "XAG"}
+OANDA_ALIASES = {"GOLD": "XAU_USD", "XAUUSD": "XAU_USD", "SILVER": "XAG_USD", "XAGUSD": "XAG_USD"}
+
+
+def crypto_pair(symbol: str) -> str | None:
+    """BTCUSD or BTC/USD becomes BTC/USD when the base coin is one Alpaca trades; anything else is not crypto."""
+    text = symbol.upper().replace("-", "/").replace("_", "/")
+    if "/" in text:
+        base, _, quote = text.partition("/")
+    else:
+        quote = next((q for q in CRYPTO_QUOTES if text.endswith(q) and len(text) > len(q)), "")
+        base = text[: len(text) - len(quote)] if quote else ""
+    return f"{base}/{quote}" if base in CRYPTO_BASES and quote in CRYPTO_QUOTES else None
+
+
+def forex_pair(symbol: str) -> str | None:
+    text = symbol.upper().replace("/", "_")
+    base, quote = (text.split("_", 1) + [""])[:2] if "_" in text else (text[:3], text[3:])
+    if len(text.replace("_", "")) == 6 and base in FOREX_CODES and quote in FOREX_CODES and base != quote:
+        return f"{base}_{quote}"
+    return None
+
+
+def normalize_symbol(broker: str, symbol: str) -> str:
+    """The spelling the broker reports back in positions, so symbols can be compared and sent safely."""
+    text = symbol.strip().upper()
+    if broker == "oanda":
+        return OANDA_ALIASES.get(text) or forex_pair(text) or text
+    if broker == "alpaca":
+        pair = crypto_pair(text)
+        return pair.replace("/", "") if pair else text
+    return text
+
+
+def same_symbol(first: Any, second: Any) -> bool:
+    clean = lambda value: re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    return bool(clean(first)) and clean(first) == clean(second)
+
+
+def always_open(broker: str, symbol: str) -> bool:
+    return broker == "alpaca" and crypto_pair(symbol) is not None
+
+
+def supports_attached_stops(broker: str, symbol: str) -> bool:
+    return broker == "oanda" or (broker == "alpaca" and crypto_pair(symbol) is None)
+
+
+def _next_weekly(now: datetime, weekday: int, hour: int) -> datetime:
+    local = now.astimezone(NEW_YORK)
+    target = local.replace(hour=hour, minute=0, second=0, microsecond=0) + timedelta(days=(weekday - local.weekday()) % 7)
+    return target if target > local else target + timedelta(days=7)
+
+
+def _next_us_open(now: datetime) -> datetime:
+    local = now.astimezone(NEW_YORK)
+    target = local.replace(hour=9, minute=30, second=0, microsecond=0)
+    while target <= local or target.weekday() >= 5:
+        target += timedelta(days=1)
+    return target
 
 
 # Names Zuri's charts use that Alpaca's stock API does not trade. "GOLD" on Alpaca is actually Barrick Mining stock, not the metal.
@@ -86,8 +196,13 @@ ALPACA_NOT_TRADABLE = {
 
 
 def check_symbol_supported(broker: str, symbol: str) -> None:
-    if broker == "alpaca" and symbol.upper() in ALPACA_NOT_TRADABLE:
-        raise HTTPException(status_code=400, detail=ALPACA_NOT_TRADABLE[symbol.upper()])
+    upper = symbol.upper()
+    if broker == "alpaca" and upper in ALPACA_NOT_TRADABLE:
+        raise HTTPException(status_code=400, detail=ALPACA_NOT_TRADABLE[upper])
+    if broker == "alpaca" and crypto_pair(upper) is None and forex_pair(upper) is not None:
+        raise HTTPException(status_code=400, detail=f"Alpaca doesn't trade forex pairs like {upper}. Link an OANDA account to trade forex.")
+    if broker == "tradier" and (crypto_pair(upper) or forex_pair(upper)):
+        raise HTTPException(status_code=400, detail=f"Tradier trades US stocks and ETFs only, so {upper} isn't available. Link Alpaca for crypto or OANDA for forex and gold.")
 
 
 class AlpacaAdapter:
@@ -123,6 +238,13 @@ class AlpacaAdapter:
         ]
 
     def price(self, symbol: str) -> float:
+        pair = crypto_pair(symbol)
+        if pair:
+            data = _request("GET", CRYPTO_TRADES_URL, headers=self.headers, params={"symbols": pair})
+            price = _num(((data.get("trades") or {}).get(pair) or {}).get("p"))
+            if price is None:
+                raise HTTPException(status_code=502, detail=f"Could not fetch price for {symbol}.")
+            return price
         try:
             data = _request("GET", f"https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest", headers=self.headers, params={"feed": "iex"})
         except HTTPException as e:
@@ -136,9 +258,18 @@ class AlpacaAdapter:
 
     def market_clock(self):
         data = _request("GET", f"{self.base}/v2/clock", headers=self.headers)
-        return {"is_open": bool(data.get("is_open")), "next_open": data.get("next_open"), "next_close": data.get("next_close")}
+        return {"is_open": bool(data.get("is_open")), "next_open": data.get("next_open"), "next_close": data.get("next_close"), "queues": True, "market": "US stock market"}
 
     def place_order(self, symbol: str, side: str, quantity: float, stop_loss: float | None = None, take_profit: float | None = None):
+        pair = crypto_pair(symbol)
+        if pair:
+            # Alpaca has no bracket orders for crypto, and crypto trades around the clock.
+            payload = {"symbol": pair, "qty": str(quantity), "side": side, "type": "market", "time_in_force": "gtc"}
+            data = _request("POST", f"{self.base}/v2/orders", headers=self.headers, json=payload)
+            result = {"order_id": data.get("id"), "status": data.get("status"), "market_open": True}
+            if stop_loss is not None or take_profit is not None:
+                result["warnings"] = ["Alpaca can't attach a stop loss or take profit to crypto orders, so none was set. Watch this trade yourself, or close it from Open positions."]
+            return result
         payload = {"symbol": symbol, "qty": str(quantity), "side": side, "type": "market", "time_in_force": "day"}
         if stop_loss is not None and take_profit is not None:
             payload.update(
@@ -188,13 +319,21 @@ class AlpacaAdapter:
             fills.append({"id": o.get("id"), "symbol": o.get("symbol"), "side": o.get("side"), "quantity": qty, "price": price, "time": o.get("filled_at")})
         return {"fills": fills, "round_trips": None}
 
-    def candles(self, symbol: str, count: int = 80):
-        start = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    def _bar_page(self, symbol: str, params: dict):
+        pair = crypto_pair(symbol)
+        if pair:
+            data = _request("GET", CRYPTO_BARS_URL, headers=self.headers, params={**params, "symbols": pair})
+            return (data.get("bars") or {}).get(pair) or [], data.get("next_page_token")
         data = _request(
             "GET", f"https://data.alpaca.markets/v2/stocks/{symbol}/bars", headers=self.headers,
-            params={"timeframe": "15Min", "start": start, "limit": 1000, "feed": "iex", "adjustment": "raw"},
+            params={**params, "feed": "iex", "adjustment": "raw"},
         )
-        return [{"t": b["t"], "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"]} for b in (data.get("bars") or [])][-count:]
+        return data.get("bars") or [], data.get("next_page_token")
+
+    def candles(self, symbol: str, count: int = 80):
+        start = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows, _ = self._bar_page(symbol, {"timeframe": "15Min", "start": start, "limit": 1000})
+        return [{"t": b["t"], "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"]} for b in rows][-count:]
 
     def historical_candles(self, symbol: str, timeframe: str, start: datetime, end: datetime):
         timeframes = {"1m": "1Min", "5m": "5Min", "15m": "15Min", "1h": "1Hour", "1D": "1Day", "1W": "1Week"}
@@ -210,17 +349,11 @@ class AlpacaAdapter:
             "start": start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
             "end": end.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
             "limit": 10000,
-            "feed": "iex",
-            "adjustment": "raw",
         }
         bars = []
         while len(bars) < 10000:
-            data = _request(
-                "GET", f"https://data.alpaca.markets/v2/stocks/{symbol}/bars",
-                headers=self.headers, params=params,
-            )
-            bars.extend(data.get("bars") or [])
-            token = data.get("next_page_token")
+            rows, token = self._bar_page(symbol, params)
+            bars.extend(rows)
             if not token or len(bars) >= 10000:
                 break
             params["page_token"] = token
@@ -232,6 +365,7 @@ class AlpacaAdapter:
         return _aggregate_candles(candles, 4)
 
     def close_position(self, symbol: str):
+        symbol = normalize_symbol("alpaca", symbol)
         try:
             response = requests.delete(f"{self.base}/v2/positions/{symbol}", headers=self.headers, timeout=TIMEOUT)
         except requests.RequestException as e:
@@ -294,7 +428,44 @@ class OandaAdapter:
             })
         return result
 
+    def market_clock(self):
+        now = datetime.now(timezone.utc)
+        data = _request("GET", f"{self.base}/pricing", headers=self.headers, params={"instruments": "EUR_USD"})
+        prices = data.get("prices") or []
+        is_open = bool(prices[0].get("tradeable")) if prices else True
+        return {
+            "is_open": is_open,
+            "next_open": None if is_open else _iso(_next_weekly(now, 6, 17)),
+            "next_close": _iso(_next_weekly(now, 4, 17)) if is_open else None,
+            "queues": False,
+            "market": "Forex market",
+        }
+
+    def open_orders(self):
+        data = _request("GET", f"{self.base}/pendingOrders", headers=self.headers).get("orders", [])
+        result = []
+        for o in data:
+            if o.get("type") not in ("LIMIT", "STOP", "MARKET_IF_TOUCHED"):
+                continue
+            units = _num(o.get("units")) or 0.0
+            result.append({"id": o.get("id"), "symbol": o.get("instrument"), "quantity": abs(units), "side": "buy" if units > 0 else "sell", "type": str(o.get("type")).lower(), "status": "accepted", "submitted_at": _trim_time(o.get("createTime")), "order_class": None})
+        return result
+
+    def cancel_order(self, order_id: str):
+        _action_request("PUT", f"{self.base}/orders/{order_id}/cancel", headers=self.headers, not_found="That order is no longer open. It may already have filled or been cancelled.")
+
+    def close_position(self, symbol: str):
+        instrument = normalize_symbol("oanda", symbol)
+        held = next((p for p in self.positions() if same_symbol(p["symbol"], instrument)), None)
+        if held is None:
+            raise HTTPException(status_code=404, detail="You no longer hold that position. It may already be closed.")
+        body = {"longUnits": "ALL"} if held["side"] == "long" else {"shortUnits": "ALL"}
+        data = _action_request("PUT", f"{self.base}/positions/{held['symbol']}/close", headers=self.headers, json=body, not_found="You no longer hold that position. It may already be closed.")
+        fill = data.get("longOrderFillTransaction") or data.get("shortOrderFillTransaction") or {}
+        return {"order_id": fill.get("id"), "status": "filled" if fill else "submitted"}
+
     def price(self, symbol: str) -> float:
+        symbol = normalize_symbol("oanda", symbol)
         data = _request("GET", f"{self.base}/pricing", headers=self.headers, params={"instruments": symbol})
         prices = data.get("prices") or []
         bid = _num(prices[0].get("closeoutBid")) if prices else None
@@ -304,6 +475,7 @@ class OandaAdapter:
         return (bid + ask) / 2
 
     def place_order(self, symbol: str, side: str, quantity: float, stop_loss: float | None = None, take_profit: float | None = None):
+        symbol = normalize_symbol("oanda", symbol)
         units = int(quantity) if side == "buy" else -int(quantity)
         order = {"type": "MARKET", "instrument": symbol, "units": str(units), "timeInForce": "FOK", "positionFill": "DEFAULT"}
         if stop_loss is not None:
@@ -311,6 +483,12 @@ class OandaAdapter:
         if take_profit is not None:
             order["takeProfitOnFill"] = {"price": str(take_profit)}
         data = _request("POST", f"{self.base}/orders", headers=self.headers, json={"order": order})
+        cancelled = data.get("orderCancelTransaction")
+        if cancelled and not data.get("orderFillTransaction"):
+            reason = str(cancelled.get("reason") or "")
+            if reason == "MARKET_HALTED":
+                raise HTTPException(status_code=409, detail="OANDA rejected the order because the forex market is closed. Try again when it reopens (Sunday evening New York time).")
+            raise HTTPException(status_code=409, detail=f"OANDA cancelled the order ({reason.replace('_', ' ').lower() or 'no reason given'}). Nothing was filled.")
         fill = data.get("orderFillTransaction") or data.get("orderCreateTransaction") or {}
         return {"order_id": fill.get("id"), "status": "filled" if data.get("orderFillTransaction") else "submitted"}
 
@@ -423,6 +601,48 @@ class TradierAdapter:
             headers=self.headers,
             data={"class": "equity", "symbol": symbol, "side": side, "quantity": int(quantity), "type": "market", "duration": "day"},
         )
+        order = data.get("order", {})
+        return {"order_id": order.get("id"), "status": order.get("status")}
+
+    def market_clock(self):
+        host = self.base.split("/v1/")[0]
+        clock = _request("GET", f"{host}/v1/markets/clock", headers=self.headers).get("clock") or {}
+        is_open = clock.get("state") == "open"
+        now = datetime.now(timezone.utc)
+        target = None
+        try:
+            hour, minute = (int(x) for x in str(clock.get("next_change", "")).split(":")[:2])
+            local = datetime.strptime(str(clock.get("date")), "%Y-%m-%d").replace(hour=hour, minute=minute, tzinfo=NEW_YORK)
+            target = local if local > now.astimezone(NEW_YORK) else None
+        except (ValueError, TypeError):
+            pass
+        if is_open:
+            next_open, next_close = None, target and _iso(target)
+        else:
+            # next_change can be today's pre-market; only trust it when the following state is the open
+            next_open = _iso(target) if target and clock.get("next_state") == "open" else _iso(_next_us_open(now))
+            next_close = None
+        return {"is_open": is_open, "next_open": next_open, "next_close": next_close, "queues": True, "market": "US stock market"}
+
+    def open_orders(self):
+        orders = (_request("GET", f"{self.base}/orders", headers=self.headers).get("orders") or {})
+        items = orders.get("order", []) if isinstance(orders, dict) else []
+        if isinstance(items, dict):
+            items = [items]
+        return [
+            {"id": str(o.get("id")), "symbol": o.get("symbol"), "quantity": _num(o.get("quantity")), "side": "buy" if str(o.get("side")).startswith("buy") else "sell", "type": o.get("type"), "status": o.get("status"), "submitted_at": o.get("create_date"), "order_class": o.get("class")}
+            for o in items if o.get("status") in ("open", "pending", "partially_filled")
+        ]
+
+    def cancel_order(self, order_id: str):
+        _action_request("DELETE", f"{self.base}/orders/{order_id}", headers=self.headers, not_found="That order is no longer open. It may already have filled or been cancelled.", conflict="That order can't be cancelled any more. It may already have filled.", conflict_codes=(400, 409, 422))
+
+    def close_position(self, symbol: str):
+        held = next((p for p in self.positions() if same_symbol(p["symbol"], symbol)), None)
+        if held is None:
+            raise HTTPException(status_code=404, detail="You no longer hold that position. It may already be closed.")
+        side = "sell" if held["side"] == "long" else "buy_to_cover"
+        data = _request("POST", f"{self.base}/orders", headers=self.headers, data={"class": "equity", "symbol": held["symbol"], "side": side, "quantity": int(held["quantity"]), "type": "market", "duration": "day"})
         order = data.get("order", {})
         return {"order_id": order.get("id"), "status": order.get("status")}
 

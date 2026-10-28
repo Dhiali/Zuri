@@ -12,6 +12,8 @@ const STATUS_TEXT: Record<string, string> = {
   partially_filled: "Partly filled",
   held: "Waiting for its entry to fill",
   accepted_for_bidding: "Accepted, waiting for the market",
+  open: "Waiting to fill",
+  pending: "Being sent to the market",
 };
 
 export function PendingOrders({ token, enabled, refreshKey }: { token: string; enabled: boolean; refreshKey: number }) {

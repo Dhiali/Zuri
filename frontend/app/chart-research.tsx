@@ -3,6 +3,7 @@ import { formatDateTime } from "./time-zone";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { backendUrl } from "./linked-account";
+import { loadResearchState, saveResearchState, type ResearchKind } from "./user-data";
 
 type Condition = "breakout" | "moving_average_cross" | "rsi_level";
 type Direction = "up" | "down" | "above" | "below" | "bullish" | "bearish";
@@ -260,26 +261,68 @@ export function ChartResearch({
     [runsState, userId],
   );
   const [viewedRun, setViewedRun] = useState<BacktestRun | null>(null);
+  const syncedRef = useRef<Record<ResearchKind, boolean>>({ scanners: false, backtests: false });
+  const pushTimers = useRef<Partial<Record<ResearchKind, number>>>({});
+  const pushRemote = useCallback((kind: ResearchKind, items: unknown[]) => {
+    if (!syncedRef.current[kind] || !userId) return;
+    window.clearTimeout(pushTimers.current[kind]);
+    pushTimers.current[kind] = window.setTimeout(() => { void saveResearchState(userId, kind, items).catch(() => undefined); }, 1200);
+  }, [userId]);
 
   useEffect(() => {
     scannersRef.current = scanners;
     writeStored(`zuri.scanners.${userId}`, scanners);
-  }, [scanners, userId]);
+    pushRemote("scanners", scanners);
+  }, [scanners, userId, pushRemote]);
+
+  const runsRef = useRef(runs);
+  useEffect(() => { runsRef.current = runs; }, [runs]);
+
+  // The account is the source of truth. Anything already in this browser is uploaded once, the first time the account has nothing saved.
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    syncedRef.current = { scanners: false, backtests: false };
+    void (async () => {
+      for (const kind of ["scanners", "backtests"] as ResearchKind[]) {
+        try {
+          const remote = await loadResearchState(userId, kind);
+          if (cancelled) return;
+          if (remote === null) {
+            const local = kind === "scanners" ? scannersRef.current : runsRef.current;
+            if (local.length > 0) await saveResearchState(userId, kind, local);
+          } else if (kind === "scanners") {
+            setScannerState({ owner: userId, items: remote as Scanner[] });
+          } else {
+            setRunsState({ owner: userId, items: remote as BacktestRun[] });
+            writeStored(`zuri.backtests.${userId}`, remote);
+          }
+          syncedRef.current[kind] = true;
+        } catch {
+          // The table may not exist yet or the network is down: keep working from this browser's copy.
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [userId]);
 
   const saveRun = (run: BacktestRun) => {
     const next = [run, ...runs].slice(0, MAX_SAVED_RUNS);
     setRunsState({ owner: userId, items: next });
     writeStored(`zuri.backtests.${userId}`, next);
+    pushRemote("backtests", next);
   };
   const removeRun = (id: string) => {
     const next = runs.filter((run) => run.id !== id);
     setRunsState({ owner: userId, items: next });
     writeStored(`zuri.backtests.${userId}`, next);
+    pushRemote("backtests", next);
     if (viewedRun?.id === id) setViewedRun(null);
   };
   const clearRuns = () => {
     setRunsState({ owner: userId, items: [] });
     writeStored(`zuri.backtests.${userId}`, []);
+    pushRemote("backtests", []);
     setViewedRun(null);
   };
   const reuseRun = (run: BacktestRun) => {
@@ -499,7 +542,7 @@ export function ChartResearch({
             <button className="outline-button" type="button" disabled={scanners.length >= 5} onClick={activateScanner}>Activate scanner</button>
           </div>
         )}
-        {scanners.length > 0 && <div className="active-scanners"><div className="section-title"><div><span className="small-label">SAVED IN THIS BROWSER · CHECKED WHILE ZURI IS OPEN</span><h3>Scanners</h3></div><span className="muted">{scanners.filter((scanner) => scanner.active).length} / 5 active</span></div>
+        {scanners.length > 0 && <div className="active-scanners"><div className="section-title"><div><span className="small-label">SAVED TO YOUR ACCOUNT · CHECKED WHILE ZURI IS OPEN</span><h3>Scanners</h3></div><span className="muted">{scanners.filter((scanner) => scanner.active).length} / 5 active</span></div>
           {scanners.map((scanner) => <div className="active-scanner" key={scanner.id}>
             <div><b>{scanner.name}</b><span>{scanner.symbol} · {scanner.timeframe} · {scanner.condition.replaceAll("_", " ")}</span>{scanner.lastAlert && <small className="scanner-alert">Latest signal · {scanner.lastAlert}</small>}<small className={scanner.status === "Monitoring" ? "scanner-status" : "scanner-status warning"}>{scanner.active ? scanner.status : "Paused"}</small></div>
             <div><button className="text-action" type="button" onClick={() => updateScanners((current) => current.map((item) => item.id === scanner.id ? { ...item, active: !item.active, status: item.active ? "Paused" : "Starting" } : item))}>{scanner.active ? "Pause" : "Resume"}</button><button className="text-action" type="button" onClick={() => updateScanners((current) => current.filter((item) => item.id !== scanner.id))}>Remove</button></div>
@@ -542,7 +585,7 @@ export function ChartResearch({
       </section>
 
       <section className="content-card backtest-card" aria-labelledby="backtest-history-title" data-zuri-target="chart-backtest-history">
-        <div className="section-title"><div><span className="small-label">SAVED IN THIS BROWSER · LAST {MAX_SAVED_RUNS} RUNS</span><h2 id="backtest-history-title">Backtest history</h2></div>{runs.length > 0 && <button className="text-action" type="button" onClick={() => { if (window.confirm("Delete all saved backtest runs?")) clearRuns(); }}>Clear all</button>}</div>
+        <div className="section-title"><div><span className="small-label">SAVED TO YOUR ACCOUNT · LAST {MAX_SAVED_RUNS} RUNS</span><h2 id="backtest-history-title">Backtest history</h2></div>{runs.length > 0 && <button className="text-action" type="button" onClick={() => { if (window.confirm("Delete all saved backtest runs?")) clearRuns(); }}>Clear all</button>}</div>
         {runs.length === 0 ? <p className="muted">Every historical review you run is saved here so you can compare setups later.</p> : <div className="table-scroll"><table><thead><tr><th>Run</th><th>Setup</th><th>Range</th><th>Signals</th><th>Avg return</th><th>Positive</th><th /></tr></thead><tbody>{runs.map((run) => <tr key={run.id}>
           <td>{formatDateTime(run.ranAt)}</td>
           <td>{run.symbol} · {run.timeframe} · {run.rule.condition.replaceAll("_", " ")} {run.rule.direction}{run.label ? ` · ${run.label}` : ""}</td>
