@@ -161,9 +161,15 @@ export async function loadZuriJourney(userId: string) {
   if (data) return data as ZuriJourney;
 
   const fresh: ZuriJourney = { user_id: userId, phase: "intro", mode: null, level: null, quiz_score: null, completed_steps: [] };
-  const { error: insertError } = await supabase.from("zuri_journey").insert(fresh);
+  // Two loads can race on a first sign-in; ignoring the duplicate avoids a 409 and keeps the row the first one made.
+  const { error: insertError } = await supabase.from("zuri_journey").upsert(fresh, { onConflict: "user_id", ignoreDuplicates: true });
   if (insertError) throw new Error(`Unable to start your Zuri journey: ${insertError.message}`);
-  return fresh;
+  const { data: saved } = await supabase
+    .from("zuri_journey")
+    .select("user_id, phase, mode, level, quiz_score, completed_steps")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return (saved as ZuriJourney | null) ?? fresh;
 }
 
 export async function saveZuriJourney(journey: ZuriJourney) {

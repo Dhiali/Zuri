@@ -1990,7 +1990,7 @@ def _capture_trade(user_id: str, kind: str, symbol: str, side: str, quantity: fl
         label = "exit" if is_exit else "entry"
         note = f"Auto-captured {label}: {side} {quantity} {symbol}" + (f" at about {price}" if price else "") + f" on {broker} ({environment})."
         if details.get("realized_pl") is not None:
-            note += f" Estimated result: {details['realized_pl']}."
+            note += f" Estimated result: {details['realized_pl']} (from the price when you closed; History shows the final filled result)."
         note += " A chart snapshot is being annotated. No reason was written yet. Ask Zuri to help you fill it in."
         created = _service_request("journal_entries", "POST", json={
             "user_id": user_id, "symbol": symbol, "timeframe": "15m", "side": "Long" if long_side else "Short",
@@ -2060,9 +2060,14 @@ def trade_history(broker: str | None = Query(default=None), user: dict = Depends
     if not hasattr(adapter, "history"):
         raise HTTPException(status_code=501, detail="Trade history is not supported for this broker yet.")
     data = adapter.history()
+    # Alpaca reports crypto as BTC/USD; show it the way the rest of Zuri spells it.
+    for fill in data["fills"]:
+        fill["symbol"] = brokers.normalize_symbol(row["broker"], str(fill.get("symbol") or ""))
     trips = data.get("round_trips")
     if trips is None:
         trips = journal_analytics.pair_fills(data["fills"])
+    for trip in trips:
+        trip["symbol"] = brokers.normalize_symbol(row["broker"], str(trip.get("symbol") or ""))
     return {"broker": row["broker"], "environment": row["environment"], "fills": data["fills"], "round_trips": trips}
 
 

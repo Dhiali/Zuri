@@ -115,9 +115,10 @@ export function ZuriTradeCard({ action, broker, environment, riskLimit, onConfir
 }
 
 // Zuri takes over the screen: dims it, spotlights the real control and walks the user through, applying each step for them.
-export function ZuriTakeover({ walkthrough, watchlistEmpty, onApplyStep, onClose }: {
+export function ZuriTakeover({ walkthrough, watchlistEmpty, brokerLinked, onApplyStep, onClose }: {
   walkthrough: Walkthrough;
   watchlistEmpty: boolean;
+  brokerLinked: boolean;
   onApplyStep: (step: WalkthroughStep) => void;
   onClose: (finished: boolean) => void;
 }) {
@@ -127,6 +128,23 @@ export function ZuriTakeover({ walkthrough, watchlistEmpty, onApplyStep, onClose
   const [steps] = useState(() => walkthrough.steps.filter((item) => !item.needs_market || watchlistEmpty));
   const step = steps[index];
   const last = index === steps.length - 1;
+
+  // Linking a broker while the broker steps are showing skips ahead to the "You're linked" step.
+  const wasLinked = useRef(brokerLinked);
+  useEffect(() => {
+    if (brokerLinked && !wasLinked.current && /^Step \d+ of \d+/.test(step.title)) {
+      const done = steps.findIndex((item) => item.title.startsWith("Step 7 of 7"));
+      if (done > index) setTimeout(() => setIndex(done), 0);
+    }
+    wasLinked.current = brokerLinked;
+  }, [brokerLinked, step, steps, index]);
+  // Give the target a moment to appear (a page may still be switching) before saying it isn't there.
+  const [waited, setWaited] = useState(false);
+  useEffect(() => {
+    const reset = window.setTimeout(() => setWaited(false), 0);
+    const timer = window.setTimeout(() => setWaited(true), 1200);
+    return () => { window.clearTimeout(reset); window.clearTimeout(timer); };
+  }, [index]);
 
   useEffect(() => { onApplyStep(step); }, [step, onApplyStep]);
 
@@ -223,7 +241,7 @@ export function ZuriTakeover({ walkthrough, watchlistEmpty, onApplyStep, onClose
         <p>{step.body}</p>
         {step.how && step.how.length > 0 && <ol className="zuri-takeover-how">{step.how.map((line) => <li key={line}>{line}</li>)}</ol>}
         {step.links && step.links.length > 0 && <div className="zuri-takeover-links">{step.links.filter((link) => link.url.startsWith("https://")).map((link) => <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">{link.label} ↗</a>)}</div>}
-        {!rect && !step.needs_market && <p className="zuri-takeover-note">This part of the screen isn&apos;t showing yet, so there is nothing to highlight. It appears once you add a market or link a broker.</p>}
+        {!rect && waited && !step.needs_market && <p className="zuri-takeover-note">This part of the screen isn&apos;t showing yet, so there is nothing to highlight. It appears once you add a market or link a broker.</p>}
         <div className="zuri-takeover-actions">
           <button type="button" className="zuri-ghost" onClick={() => onClose(false)}>Exit</button>
           <span />

@@ -850,7 +850,7 @@ function TradingWorkspace() {
         involvement={involvement}
         onInvolvement={changeInvolvement}
       />
-      {walkthrough && <ZuriTakeover walkthrough={walkthrough} watchlistEmpty={watchlistSymbols.length === 0} onApplyStep={applyWalkthroughStep} onClose={closeWalkthrough} />}
+      {walkthrough && <ZuriTakeover walkthrough={walkthrough} watchlistEmpty={watchlistSymbols.length === 0} brokerLinked={Boolean(linkedAccount.data)} onApplyStep={applyWalkthroughStep} onClose={closeWalkthrough} />}
     </main>
   );
 }
@@ -1396,7 +1396,8 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       const response = await fetch(`${backendUrl}/api/positions/${encodeURIComponent(position.symbol)}?broker=${linked.data.broker}${query}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The position could not be closed.");
-      setCloseMessage(`Closing order sent for ${position.symbol}. If the market is closed, your broker may hold it until the next open and it can wait under Pending orders.`);
+      const sameAsTicket = position.symbol.replace(/[^A-Za-z0-9]/g, "").toUpperCase() === orderSymbol.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+      setCloseMessage(sameAsTicket && marketClosed && marketQueues ? `Closing order sent for ${position.symbol}. The market is closed, so your broker will hold it until the next open and it can wait under Pending orders.` : `Closing order sent for ${position.symbol}. If it doesn't fill straight away, check Pending orders.`);
       setOrdersRefresh((value) => value + 1);
       linked.refresh();
       onTraded();

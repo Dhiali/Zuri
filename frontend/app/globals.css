@@ -841,7 +841,7 @@ td b { font-weight: 580; }
 .auth-inline-error { position: absolute; top: 57px; right: 18px; max-width: 280px; padding: 7px 9px; border: 1px solid #68403e; border-radius: 4px; background: #2c1d1d; color: #efa5a0; font-size: 9px; }
 .topbar-right { position: relative; }
 .topbar-email { max-width: 185px; overflow: hidden; color: #919a98; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.signout-button { min-height: 28px; padding: 0 9px; border: 1px solid #343a3b; border-radius: 4px; background: transparent; color: #aeb7b4; cursor: pointer; font-size: 9px; }
+.signout-button { min-height: 28px; padding: 0 9px; border: 1px solid #343a3b; border-radius: 4px; background: transparent; color: #aeb7b4; cursor: pointer; font-size: 9px; white-space: nowrap; flex-shrink: 0; }
 .signout-button:hover { border-color: #65706c; background: #222628; color: #e7ece9; }
 
 @media (max-width: 900px) {
@@ -1725,4 +1725,15 @@ td { height: 44px; font-size: 12px; }
 /* Closed-market warning above the order confirmation */
 .market-warning { display: grid; gap: 4px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid #6b5a2b; border-left: 3px solid #e0b64a; border-radius: 6px; background: #2a2412; color: #e8d9a8; font-size: 12px; line-height: 1.5; }
 .market-warning strong { color: #f3cf6b; font-size: 12px; }
+
+/* Tour steps: numbered, so each instruction reads as a step */
+.zuri-takeover-how { list-style: none; counter-reset: how; padding: 0; margin: 0 0 12px; display: grid; gap: 7px; }
+.zuri-takeover-how li { counter-increment: how; position: relative; margin: 0; padding-left: 26px; font-size: 12.5px; line-height: 1.5; color: var(--text); }
+.zuri-takeover-how li::before { content: counter(how); position: absolute; left: 0; top: 1px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: rgba(185, 149, 255, .22); color: #d8c4ff; font-size: 11px; font-weight: 700; }
+
+/* Dark scrollbars for Zuri's dialogs */
+.zuri-onb-body, .zuri-onb-thread, .zuri-guide-body, .zuri-takeover-card { scrollbar-width: thin; scrollbar-color: #4a4260 transparent; }
+.zuri-onb-body::-webkit-scrollbar, .zuri-onb-thread::-webkit-scrollbar, .zuri-guide-body::-webkit-scrollbar, .zuri-takeover-card::-webkit-scrollbar { width: 8px; }
+.zuri-onb-body::-webkit-scrollbar-thumb, .zuri-onb-thread::-webkit-scrollbar-thumb, .zuri-guide-body::-webkit-scrollbar-thumb, .zuri-takeover-card::-webkit-scrollbar-thumb { background: #4a4260; border-radius: 8px; }
+.zuri-onb-body::-webkit-scrollbar-track, .zuri-onb-thread::-webkit-scrollbar-track, .zuri-guide-body::-webkit-scrollbar-track, .zuri-takeover-card::-webkit-scrollbar-track { background: transparent; }
 
