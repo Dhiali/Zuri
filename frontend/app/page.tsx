@@ -17,7 +17,6 @@ import { TIME_ZONE_NAMES, formatClock, formatDateTime, formatDeskDate, setActive
 import {
   addJournalEntry,
   deleteJournalEntry,
-  initialWatchlistSymbols,
   loadJournalEntries,
   loadUserProfile,
   loadUserPreferences,
@@ -169,9 +168,8 @@ function TradingWorkspace() {
   const [activeTool, setActiveTool] = useState("");
   const [orderSide, setOrderSide] = useState<"Buy" | "Sell">("Buy");
   const [query, setQuery] = useState("");
-  const [aiExpanded, setAiExpanded] = useState(false);
   const [aiOnChart, setAiOnChart] = useState(false);
-  const [watchlistOpen, setWatchlistOpen] = useState(true);
+  const [watchlistOpen] = useState(true);
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [journalDraftOpen, setJournalDraftOpen] = useState(false);
   const [journalDraftSide, setJournalDraftSide] = useState<JournalSide>("Watching");
@@ -486,7 +484,6 @@ function TradingWorkspace() {
   useEffect(() => {
     if (section !== "Dashboard" || journey?.phase !== "done" || !accessToken) return;
     if (nextStepAt.current && Date.now() - nextStepAt.current < 10 * 60_000) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadNextStep();
   }, [section, journey?.phase, accessToken, loadNextStep]);
   useEffect(() => {
@@ -916,7 +913,6 @@ function AuraAssistant({
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState<ZuriAction[]>([]);
-  const [actionStatus, setActionStatus] = useState<Record<string, string>>({});
   const [showSettings, setShowSettings] = useState(false);
   const sharing = useScreenShareActive();
   const topNudge = nudges[0] ?? null;
@@ -1019,7 +1015,6 @@ function AuraAssistant({
       logZuriEvent(accessToken, "approved", action.label);
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: `Done. ${outcome}` }]);
     } catch (actionError) {
-      setActionStatus((current) => ({ ...current, [action.id]: "failed" }));
       setError(actionError instanceof Error ? actionError.message : "That action didn't work.");
     }
   };
@@ -1468,7 +1463,6 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
   const estimatedValue = quantityValue * priceValue;
   const validOrder = Number.isFinite(quantityValue) && quantityValue > 0 && Number.isFinite(estimatedValue) && estimatedValue > 0;
   const buyingPowerAfter = Math.max(0, buyingPower - (orderSide === "Buy" && validOrder ? estimatedValue : 0));
-  const quotePrecision = tradeSymbol.group === "Forex" ? 5 : 2;
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!limitPrice && tradeSymbol.hasQuote) setLimitPrice(plainPrice(tradeSymbol.price));

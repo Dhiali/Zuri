@@ -1,6 +1,4 @@
-"use client";
-
-import type { ZuriJourney } from "./user-data";
+﻿"use client";
 
 export type Section = "Charts" | "Dashboard" | "Trade" | "History" | "Journal" | "Settings";
 type Mood = "idle" | "talking" | "celebrating";
@@ -9,9 +7,9 @@ export type ZuriExpression = "neutral" | "happy" | "thinking" | "surprised" | "s
 export type ZuriGesture = "nod" | "shake";
 
 function expressionFor(mood: Mood, emote?: string): ZuriExpression {
-  if (mood === "celebrating" || emote === "🎉" || emote === "✅") return "happy";
-  if (emote === "🤔" || emote === "🧐" || mood === "talking") return "thinking";
-  if (emote === "💪") return "sad";
+  if (mood === "celebrating" || emote === "ðŸŽ‰" || emote === "âœ…") return "happy";
+  if (emote === "ðŸ¤”" || emote === "ðŸ§" || mood === "talking") return "thinking";
+  if (emote === "ðŸ’ª") return "sad";
   return "neutral";
 }
 
@@ -70,123 +68,3 @@ export function ZuriMascot({ mood = "idle", size = 120, emote, expression, gestu
   );
 }
 
-type Step = {
-  id: string;
-  title: string;
-  why: string;
-  quick: string;
-  action?: { label: string; section?: Section; href?: string };
-  auto?: boolean;
-};
-
-const steps: Step[] = [
-  {
-    id: "broker-account",
-    title: "Open a free demo broker account",
-    why: "A broker is the licensed company that holds your money and carries out your trades; Zuri never holds funds. Start with a free Alpaca paper account (practice money). 1) Open https://app.alpaca.markets/signup and sign up with your email. 2) Confirm the email. 3) Make sure you're on the Paper side of the dashboard. For a click-by-click guide, press 'Do it with me' on your dashboard.",
-    quick: "Create a free Alpaca paper account at alpaca.markets. It uses simulated money.",
-    action: { label: "Open Alpaca sign-up", href: "https://app.alpaca.markets/signup" },
-  },
-  {
-    id: "broker-keys",
-    title: "Create your API keys",
-    why: "API keys are like a password that lets Zuri place trades without ever seeing your login. 1) Open your Alpaca paper dashboard (https://app.alpaca.markets/paper/dashboard/overview). 2) Check the account switcher at the top left says Paper. 3) In the API Keys box on the right, click Generate New Keys. 4) Copy the Key ID and the Secret Key; the secret is shown only once. Never enable withdrawals on a key.",
-    quick: "In Alpaca’s paper dashboard, generate an API key ID and secret (trading permissions only).",
-    action: { label: "Open Alpaca paper dashboard", href: "https://app.alpaca.markets/paper/dashboard/overview" },
-  },
-  {
-    id: "broker-link",
-    title: "Link your broker to Zuri",
-    why: "In Settings → Broker, click Link account on the Alpaca row, paste the Key ID into 'API key ID' and the Secret Key into 'API secret key', leave Environment on Paper / practice, then click Verify and link. Zuri checks them with Alpaca and stores them encrypted.",
-    quick: "Paste the key and secret in Settings → Broker and choose Paper.",
-    action: { label: "Open Settings → Broker", section: "Settings" },
-    auto: true,
-  },
-  {
-    id: "first-trade",
-    title: "Place your first paper trade",
-    why: "Pick a small size, buy or sell, and confirm. Don’t worry about winning. The goal is to see how an order flows from Zuri to your broker and back into your positions.",
-    quick: "Place a small confirmed paper order from the Trade tab.",
-    action: { label: "Open Trade", section: "Trade" },
-    auto: true,
-  },
-  {
-    id: "first-journal",
-    title: "Write your first journal note",
-    why: "Before or after a trade, write why you took it and how you felt. Over time, this is how you spot the habits that cost you money.",
-    quick: "Log a journal note on your first trade.",
-    action: { label: "Open Journal", section: "Journal" },
-    auto: true,
-  },
-  {
-    id: "risk-rules",
-    title: "Review your risk limits",
-    why: "Risk limits are your seatbelt. Check that your per-trade risk is small (1–2% is a common guideline) and that your daily loss limit suits you.",
-    quick: "Check your per-trade and daily risk limits.",
-    action: { label: "Open Settings", section: "Settings" },
-  },
-];
-
-export function JourneyChecklist({
-  journey,
-  brokerLinked,
-  hasPositions,
-  journalCount,
-  onChange,
-  setSection,
-  compact = false,
-}: {
-  compact?: boolean;
-  journey: ZuriJourney;
-  brokerLinked: boolean;
-  hasPositions: boolean;
-  journalCount: number;
-  onChange: (next: ZuriJourney) => void;
-  setSection: (section: Section) => void;
-}) {
-  const level = journey.level ?? "foundations";
-  const done = (step: Step) =>
-    journey.completed_steps.includes(step.id) ||
-    (step.id === "broker-link" && brokerLinked) ||
-    (step.id === "first-trade" && hasPositions) ||
-    (step.id === "first-journal" && journalCount > 0);
-  const completedCount = steps.filter(done).length;
-  const next = steps.find((step) => !done(step));
-  const detailed = level === "foundations";
-
-  const markDone = (id: string) => onChange({ ...journey, completed_steps: [...journey.completed_steps, id] });
-
-  if (compact) {
-    return (
-      <section className="content-card zuri-progress">
-        <span className="small-label">SETUP PROGRESS · {completedCount} OF {steps.length}</span>
-        <ol className="zuri-steps">
-          {steps.map((step) => <li key={step.id} className={done(step) ? "done" : step === next ? "current" : ""}><span>{done(step) ? "✓" : ""}</span>{step.title}</li>)}
-        </ol>
-      </section>
-    );
-  }
-
-  return (
-    <section className="content-card zuri-checklist">
-      <div className="zuri-checklist-head">
-        <ZuriMascot mood={next ? "idle" : "celebrating"} size={64} />
-        <div>
-          <span className="small-label">ZURI · YOUR NEXT STEPS · {completedCount} OF {steps.length}</span>
-          <h2>{next ? next.title : "You’re all set. Great work!"}</h2>
-          {next ? <p>{detailed ? next.why : next.quick}</p> : <p>Your broker is linked and you’ve covered the essentials. Keep journaling, keep your risk small and ask me anything.</p>}
-          {next && (
-            <div className="zuri-tour-actions">
-              {next.action?.href && <a className="outline-button" href={next.action.href} target="_blank" rel="noreferrer">{next.action.label} ↗</a>}
-              {next.action?.section && <button className="outline-button" onClick={() => setSection(next.action!.section!)}>{next.action.label} →</button>}
-              {!next.auto && <button className="solid-button" onClick={() => markDone(next.id)}>I’ve done this</button>}
-            </div>
-          )}
-        </div>
-      </div>
-      <ol className="zuri-steps">
-        {steps.map((step) => <li key={step.id} className={done(step) ? "done" : step === next ? "current" : ""}><span>{done(step) ? "✓" : ""}</span>{step.title}</li>)}
-      </ol>
-    </section>
-  );
-}
