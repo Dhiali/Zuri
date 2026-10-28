@@ -175,6 +175,7 @@ function SnapshotCard({ snapshot, token, onChanged }: { snapshot: TradeSnapshot;
       {reveal && snapshot.analysis && <p className="snapshot-analysis"><b>Zuri:</b> {snapshot.analysis}</p>}
       {reveal && snapshot.annotations.length > 0 && <ol className="snapshot-notes">{snapshot.annotations.map((a, i) => <li key={i}><span style={{ color: kindColor[a.kind] ?? kindColor.note }}>{a.kind}</span> {a.text}</li>)}</ol>}
       {!snapshot.analysis && <p className="auth-message">Zuri has not annotated this chart yet.</p>}
+      {/* eslint-disable-next-line @next/next/no-img-element -- base64 capture from the API, not optimizable */}
       {screen && <img className="snapshot-screen" src={screen} alt={`Screen capture when ${snapshot.symbol} was traded`} />}
       {message && <p className="auth-message" role="alert">{message}</p>}
       <div className="snapshot-actions">

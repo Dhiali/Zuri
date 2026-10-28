@@ -216,9 +216,10 @@ function TradingWorkspace() {
   const activeSymbol = watchlistSymbols.includes(selectedSymbol) ? selectedSymbol : watchlistInstruments[0]?.symbol ?? initialInstruments[0].symbol;
   const symbol = instruments.find((instrument) => instrument.symbol === activeSymbol) ?? initialInstruments[0];
 
+  const activeSymbolWatched = watchlistSymbols.includes(activeSymbol);
   useEffect(() => {
-    if (section === "Charts" && workspaceDataUserId === userId && watchlistSymbols.includes(activeSymbol)) trackJourneyEvent(accessToken, "symbol_viewed", activeSymbol);
-  }, [section, activeSymbol, accessToken, userId, workspaceDataUserId]);
+    if (section === "Charts" && workspaceDataUserId === userId && activeSymbolWatched) trackJourneyEvent(accessToken, "symbol_viewed", activeSymbol);
+  }, [section, activeSymbol, activeSymbolWatched, accessToken, userId, workspaceDataUserId]);
   const aiBrief = symbol.hasQuote
     ? `${symbol.symbol} is ${symbol.change} on the day${symbol.low && symbol.high ? `, trading between ${symbol.low} and ${symbol.high}` : ""}. This is a snapshot of price action, not a forecast. Ask Zuri for a full chart analysis, then check price action and risk before you act.`
     : "Waiting for the real market quote. Ask Zuri for a chart analysis once it loads.";
