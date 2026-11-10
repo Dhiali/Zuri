@@ -2,6 +2,33 @@
 
 <img src="docs/zuri-header.png" alt="Zuri Markets: an AI-assisted, web-based trading platform with charts, a trade ticket, an automatic journal and an AI coach" width="100%" />
 
+</div>
+
+---
+
+## Table of contents
+
+- [Project overview](#project-overview)
+- [Getting started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Install and run locally](#how-to-install-and-run-locally)
+  - [Google sign-in (optional)](#google-sign-in-optional)
+- [Project features](#project-features)
+- [Development process](#development-process)
+  - [Creative direction and theme](#creative-direction-and-theme)
+  - [Technical decisions](#technical-decisions)
+  - [User flow](#user-flow)
+  - [System structure](#system-structure)
+  - [Core data relationships](#core-data-relationships)
+  - [Alpaca paper fill tracking](#alpaca-paper-fill-tracking)
+- [Final outcome](#final-outcome)
+- [Conclusion](#conclusion)
+- [License, contact and acknowledgments](#license-contact-and-acknowledgments)
+
+---
+
+## Project overview
+
 **An AI-guided trading desk that teaches new traders by doing: paper-trade first, journal everything, learn from your own habits.**
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)
@@ -11,821 +38,317 @@
 ![Supabase](https://img.shields.io/badge/Supabase-Postgres%20%2B%20Auth-3ECF8E?logo=supabase&logoColor=white)
 ![Status](https://img.shields.io/badge/status-MVP-orange)
 
-</div>
+Zuri Markets is a financial-literacy workspace for new and developing traders. Its AI guide helps users explore charts, practise with a paper account, and learn from their trading journal. Experienced traders can also use its trade ticket and research tools.
 
----
+- **Practice first:** onboarding encourages paper trading; live orders require extra confirmation.
+- **User-controlled trading:** Zuri can explain and propose trades, but the user confirms each order.
+- **Learning through review:** the journal supports confirmed Alpaca paper fills, while older automatic records remain unverified. See [fill tracking](#alpaca-paper-fill-tracking) for limitations.
+- **Private by design:** user data is protected by Supabase row-level security, and broker credentials are encrypted.
 
-## Table of contents
+## Getting started
 
-1. [Project overview](#1-project-overview)
-2. [Features](#2-features)
-3. [Architecture and diagrams](#3-architecture-and-diagrams)
-4. [Technologies used](#4-technologies-used)
-5. [Installation and setup](#5-installation-and-setup)
-6. [Environment variables](#6-environment-variables)
-7. [Usage guide](#7-usage-guide)
-8. [UI mockups](#8-ui-mockups)
-9. [Security](#9-security)
-10. [Testing and quality](#10-testing-and-quality)
-11. [Project structure](#11-project-structure)
-12. [API reference](#12-api-reference)
-13. [Known limitations](#13-known-limitations)
-14. [Troubleshooting](#14-troubleshooting)
-15. [Demo video](#15-demo-video)
-16. [Team and contributions](#16-team-and-contributions)
-17. [Acknowledgements](#17-acknowledgements)
+**Use Zuri online:** Open [zuri-markets.vercel.app](https://zuri-markets.vercel.app), create an account or sign in, and follow the onboarding guide. To practise trading, link your own Alpaca paper account in **Settings → Broker**. No local installation is required.
 
----
+To develop or run your own copy, follow the two sections below. The frontend and backend run locally, while Supabase provides the database and authentication.
 
-## 1. Project overview
+### Prerequisites
 
-### Purpose
-
-Most trading platforms assume you already know what you are doing. New traders are handed a dense screen, a live-money button and no feedback, and most of them learn expensive lessons alone.
-
-**Zuri Markets** is a personal trading desk built around the opposite idea: the platform should coach you. An AI guide named **Zuri** meets each new user, finds out their experience and goals, walks them through the whole app, helps them link a free **paper-trading** (practice) broker account, coaches them through a first trade, and then keeps an honest record of what they did so it can point out their own habits, good and bad.
-
-### Domain: Education
-
-Zuri addresses a real-world **education** problem: retail traders lose money because nobody teaches them before they risk it. Zuri is a financial-literacy tool. It teaches through practice (paper trading), explains every step in plain language, and uses an AI coach to turn the user's own trades into lessons.
-
-### Who it is for
-
-| Audience | What Zuri gives them |
+| What you need | How to get it |
 |---|---|
-| **Brand-new traders** | A guided tour, a step-by-step broker setup, a first-trade coach and free learning resources chosen for their level. |
-| **Developing traders** | An automatic journal, a "leak finder" that spots patterns such as trades without a stop-loss, and chart snapshots to review. |
-| **Experienced traders** | A fast trade ticket, scanners, historical signal reviews and a terse assistant that does not over-explain. |
+| **Git** | Install [Git](https://git-scm.com/downloads) to clone the repository. |
+| **Node.js and npm** | Install [Node.js](https://nodejs.org/en/download) 20.9 or newer; npm is included. Check with `node --version` and `npm --version`. |
+| **Python and pip** | Install [Python](https://www.python.org/downloads/) 3.11 or newer. On Windows, enable **Add Python to PATH** during installation. Check with `python --version` and `python -m pip --version`. |
+| **Supabase project** | Create a project in the [Supabase dashboard](https://supabase.com/dashboard). In **Project Settings → API**, find its URL, publishable/anon key, and secret `service_role` key. The service role key is for the backend only. Use a separate development project, not the live database. |
+| **Groq API key** | Create a key in the [Groq console](https://console.groq.com/keys) for Zuri's AI features. |
+| **Alpaca paper account** | Create an [Alpaca account](https://alpaca.markets/), open its paper-trading dashboard and generate paper API keys. These are needed for paper orders, not for installing the app; link them in Zuri rather than sharing them. |
+| **Application packages** | Install Python packages from [`backend/requirements.txt`](./backend/requirements.txt) and frontend packages from [`frontend/package-lock.json`](./frontend/package-lock.json) using the commands below. |
 
-### What makes it different
+Optional: configure [Google sign-in](#google-sign-in-optional) if you want it, and see [fill tracking](#alpaca-paper-fill-tracking) before enabling confirmed-fill reconciliation. Third-party services may have usage limits or costs.
 
-- **Practice first.** Onboarding steers users to a paper account. Live accounts are supported but gated behind an explicit `CONFIRM LIVE` phrase.
-- **The AI never trades for you.** Zuri can propose and explain, but every order needs your explicit confirmation.
-- **Automatic journal.** Zuri attempts to capture submitted orders and detected positions, but these older automatic records are not verified fills. Check broker history before relying on them; chart snapshots are best-effort.
+### How to install and run locally
 
-  For a dedicated paper-only staging environment, set `ZURI_PAPER_ONLY=true` on the backend. This limits broker access and new connections to Alpaca paper accounts, selects only an Alpaca paper account as the active connection, and uses confirmed fills instead of legacy automatic capture. Existing unsupported accounts remain visible for disconnection but cannot be used. Before submitting a new order, the backend requires the fill cursor to be available; if storage or the migration is unavailable, the order is not submitted. This switch defaults to false and must not be enabled on an existing live environment without a separate rollout plan.
+1. **Clone the repository** in a terminal:
 
-  The local Alpaca paper-fill ledger and protected reconciliation endpoint can create a separate journal record for each confirmed partial fill. An account's first cursor starts at the migration or account-link/change time, rather than its first polling run; earlier fills are not imported. Reconnecting the same account resumes its existing checkpoint. This cutoff can overlap legacy unverified records, which are preserved. The endpoint remains disabled without a server-only `ALPACA_FILL_RECONCILIATION_SECRET` of at least 32 bytes. An optional scheduler dispatch script exists, but no job is configured and older order-based capture has not yet been replaced in the default configuration; deployment of this fill feature has not been verified. Do not rely on it as a replacement for broker history until reconciliation is completed and deployed.
+   ```bash
+   git clone https://github.com/Dhiali/Zuri.git
+   cd Zuri
+   ```
 
-  [`supabase/paper_fill_scheduler.sql`](./supabase/paper_fill_scheduler.sql) is an opt-in setup script, not a migration or an active schedule. It requires Supabase Vault, `pg_net`, Vault secrets named `zuri_fill_backend_url` (HTTPS origin only) and `zuri_fill_reconciliation_secret` (matching the backend secret), and a separately configured `pg_cron` job. Dispatch is limited to ten accounts per run; pending requests are not repeated for three minutes, after which missing responses are retried. The service-only dispatch table reports the most recent response or failure, and `cron.job_run_details` reports job failures. `pg_net` queues requests asynchronously and its queue can expose decrypted authorization headers to database roles: audit and restrict database access before use. Queues and responses are unlogged and responses expire, so monitoring and periodic retries remain necessary.
+2. **Set up Supabase.** In your development project's SQL Editor, run every file in [`supabase/migrations/`](./supabase/migrations) once, in timestamp order. Do not rerun already-applied migrations. Enable the Email provider under **Authentication**; set the Site URL to `http://localhost:3000` and allow both localhost and `127.0.0.1` URLs, including their `/email-verified` paths. For branded emails, configure the [confirmation](./frontend/email-templates/confirm-signup.html), [magic link](./frontend/email-templates/magic-link.html), and [reset password](./frontend/email-templates/reset-password.html) templates in Supabase; preserve their template placeholders. See [Google sign-in](#google-sign-in-optional) for optional OAuth setup.
 
-  **Do not enable the job yet.** Submitted-order capture can still create misleading records, and the complete broker-to-database flow has not been tested end to end. Resolve and test those gaps before scheduling, migrating or releasing to production.
+3. **Set up the backend** from the repository root:
 
-  `ALPACA_CONFIRMED_FILL_JOURNAL=true` switches only Alpaca paper accounts from legacy order/position capture to confirmed-fill journal sync. It defaults to false. Do not enable it until the migration, scheduler, monitoring and complete broker-to-database validation are in place: confirmed-fill snapshots and trade-level journey analytics are not yet integrated. In this mode, the updated frontend does not attach an order screenshot to a guessed same-symbol legacy snapshot; no confirmed-fill screenshot is created yet. Deploy the compatible frontend before enabling the backend switch. The journal separately counts confirmed fill entries among the most recent 500 entries, including partial fills; older or deleted entries may be missing. Use **Sync journal** to check again while the journal is open; if a backlog is reported, repeat the sync. Other brokers and live accounts retain their existing behavior.
+   <details open>
+   <summary>Windows PowerShell</summary>
 
-  `backend.test_fill_integration` is an opt-in integration test for a disposable Docker container labelled `zuri.fill.integration=disposable`, with an isolated `zuri_fill_integration` database containing the initial, broker, journey-event and fill migrations. Set `ZURI_FILL_TEST_CONTAINER` to that container ID to run it. The test uses a simulated Alpaca response and a PostgreSQL-backed storage adapter, not Alpaca or PostgREST; it checks pending orders, partial fills and recovery after a committed response is lost. Never point it at a persistent database: it deletes its fixed test user.
-- **Honest numbers.** Results are labelled as estimates where they are estimates, and the AI is told to use only the figures it is given.
-- **Your data, your account.** Everything is stored per user in Supabase behind row-level security. Broker credentials are encrypted and never returned to the browser.
+   ```powershell
+   python -m venv backend\venv
+   backend\venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+   Copy-Item backend\.env.example backend\.env
+   backend\venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+   </details>
+
+   <details>
+   <summary>macOS / Linux</summary>
+
+   ```bash
+   python3 -m venv backend/venv
+   backend/venv/bin/python -m pip install -r backend/requirements.txt
+   cp backend/.env.example backend/.env
+   backend/venv/bin/python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+   </details>
+
+   Edit `backend/.env`: set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `GROQ_API_KEY`, and `BROKER_ENCRYPTION_KEY` to the generated key. Back up the encryption key securely: changing it makes stored broker credentials unreadable. Never commit or share the `.env` file.
+
+4. **Set up the frontend** in a second terminal:
+
+   ```bash
+   cd Zuri/frontend
+   npm ci
+   ```
+
+   Copy `frontend/.env.example` to `frontend/.env.local` (`Copy-Item .env.example .env.local` in PowerShell, or `cp .env.example .env.local` on macOS/Linux, while in `frontend`). Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to the same development project, and leave `NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8000` for local use. Never put the service role key in a `NEXT_PUBLIC_` variable.
+
+5. **Start both services.** From the repository root, start the backend:
+
+   ```powershell
+   # Windows PowerShell
+   backend\venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+   ```
+
+   ```bash
+   # macOS / Linux
+   backend/venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+   ```
+
+   In the frontend terminal, run `npm run dev`. Open [http://localhost:3000](http://localhost:3000); the backend API docs are at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). Sign up, confirm your email, and link paper keys to try a practice trade.
+
+   If you are working from an in-progress Git merge, resolve its conflicts before starting the backend. See [`backend/.env.example`](./backend/.env.example) and [`frontend/.env.example`](./frontend/.env.example) for additional configuration.
+
+### Google sign-in (optional)
+
+In the [Google Cloud Console](https://console.cloud.google.com/), create a web application OAuth client. Add `http://localhost:3000` and `http://127.0.0.1:3000` as authorised JavaScript origins and the callback URL shown by Supabase as an authorised redirect URI. Enter the client ID and secret in the Supabase Google provider settings.
 
 ---
 
-## 2. Features
+## Project features
 
-### Onboarding and guidance
-- **Email and Google sign-up** with email verification and a branded confirmation page.
-- **"Meet Zuri"** onboarding chat that learns the user's experience, goals and preferred style (Training buddy or Assistant).
-- **Guided tour** of the app (33 steps) that highlights real parts of the screen.
-- **Broker setup guide**: a 7-step walkthrough for creating Alpaca paper keys. It jumps to the final step by itself once the broker is linked.
-- **First-trade coach** that tracks progress from "link a broker" to "first trade done".
-- **Persistent memory**: Zuri remembers what the user understands and how they like things explained. Users can view or reset it.
+The mockup briefs below describe the screens to add to this showcase. Use fictional account details and hide personal information and broker credentials.
 
-### Trading
-- **Trade ticket** with market and limit orders, stop-loss and take-profit, and position sizing against account risk.
-- **Conversational trading**: describe a trade in plain English and Zuri parses it into a ticket for you to review.
-- **Multi-broker**: **Alpaca** (stocks and crypto), **OANDA** (forex) and **Tradier** (stocks), paper or live.
-- **Closed-market warning** before an order is sent while the market is shut, with the right acknowledgement for brokers that queue orders.
-- **Pending orders** you can list and cancel, and **Close position** / **Close all**.
-- **Safety gates**: a confirmation checkbox on every order and a typed `CONFIRM LIVE` phrase for live accounts.
+### Guided onboarding
 
-### Charts and research
-- **Live TradingView chart** with a watchlist and real quotes.
-- **Market briefing** from CNBC and BBC feeds, with a one-click "Ask Zuri" on any story.
-- **AI scanners**: describe a rule ("alert me when BTCUSD RSI crosses above 70"), review the draft, then activate it. Supports price breakouts, moving-average crosses and RSI levels.
-- **Historical signal review (backtests)** on real broker candles, with a custom date range of up to five years.
-- Scanners and backtest history are **saved to your account** and sync across devices.
+Zuri welcomes new users, learns their experience and goals, and guides them through the workspace and paper-broker setup. A first-trade coach tracks their progress.
 
-### Review and learning
-- **Dashboard** with balance, an AI "best next move" card, a weekly activity breakdown and free courses chosen for the user's level.
-- **History**: closed trades, orders and open positions from the broker, with CSV export.
-- **Chart snapshots** can include entry, stop and target lines. Zuri annotates support, resistance and stop placement, and offers a **practice mode** that hides the annotations until revealed. Capture and annotation depend on market data and may not succeed.
-- **Journal**: auto-captured entries plus your own notes, an AI-written note for any trade, and **Analyse my journey** for a leak and strategy report.
+**Mockup to create:** The "Meet Zuri" conversation alongside an onboarding progress indicator or a highlighted step in the guided tour.
 
-### Account and security
-- Settings for **Account, Broker, Trading, Risk, Platform, Display and Security**.
-- Password reset, email change, and permanent **account deletion**.
+### Dashboard and learning
 
----
+The dashboard brings together account information, trading activity, a suggested next step and learning resources tailored to the user's experience.
 
-## 3. Architecture and diagrams
+**Mockup to create:** The dashboard with paper-account balance cards, a weekly activity summary, Zuri's next-step card and a learning resource.
 
-### 3.1 System architecture
+### Charts and market research
 
-```mermaid
-flowchart LR
-    subgraph Browser["Browser"]
-        UI["Next.js 16 + React 19 app<br/>(TypeScript)"]
-        TV["TradingView widget"]
-    end
+Users can explore TradingView charts, manage a watchlist and read market news. They can also create scanners and review historical signals using broker candle data.
 
-    subgraph Server["FastAPI backend (Python)"]
-        API["REST API<br/>auth - trading - journal - AI"]
-        AG["Zuri agent<br/>tour - memory - coaching"]
-        BR["Broker adapters<br/>Alpaca - OANDA - Tradier"]
-        CR["Fernet credential vault"]
-    end
+**Mockup to create:** The charts workspace showing a price chart, watchlist, timeframe controls and market-news or scanner panel. Label delayed quotes where appropriate.
 
-    subgraph Supabase["Supabase"]
-        AUTH["Auth<br/>(email, Google, PKCE)"]
-        DB[("PostgreSQL<br/>row-level security")]
-    end
+### Paper trading and order management
 
-    subgraph External["External services"]
-        LLM["Groq LLM<br/>(+ optional fallback AI)"]
-        BRK["Broker APIs"]
-        MKT["Quote and news feeds"]
-    end
+The trade ticket lets users select a symbol, side and quantity, review estimated value, and confirm a market order. The workspace also displays pending orders and open positions. Alpaca paper trading supports practice without real funds; live accounts require an additional confirmation phrase.
 
-    UI -- "Supabase session (JWT)" --> AUTH
-    UI -- "own rows, RLS" --> DB
-    UI -- "Bearer token" --> API
-    UI --- TV
-    API -- "verify token" --> AUTH
-    API -- "service role, scoped to user" --> DB
-    API --> AG
-    API --> BR
-    BR --> CR
-    BR --> BRK
-    AG --> LLM
-    API --> MKT
-```
+**Mockup to create:** The trade screen with an **Alpaca paper** badge, a filled-in order ticket, confirmation checkbox, pending orders and open positions.
 
-**How to read it:** the browser talks to Supabase directly for sign-in and for the user's own simple data (protected by row-level security), and to the FastAPI backend for everything that needs secrets, broker access or AI. The backend never trusts the browser: it verifies every token with Supabase and scopes every query to that user.
+### Journal, history and insights
 
-### 3.2 Authentication flow
+The journal combines personal notes with automatic records and, when configured, confirmed Alpaca paper fills. Users can sync fills, analyse their journey and review trade history and chart snapshots. Older automatic records may be unverified; see [fill tracking](#alpaca-paper-fill-tracking).
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor U as User
-    participant FE as Next.js app
-    participant SA as Supabase Auth
-    participant BE as FastAPI
+**Mockup to create:** The journal showing a clearly labelled confirmed paper fill, **Sync journal**, an insights summary and a trade note or snapshot.
 
-    U->>FE: Sign up (email or Google)
-    FE->>SA: Create account (PKCE flow)
-    SA-->>U: Verification email
-    U->>FE: Click link, lands on /email-verified
-    FE->>BE: POST /api/user/confirm-email-link
-    BE->>SA: Verify the access token
-    SA-->>BE: User identity
-    BE-->>FE: Email link confirmed
-    U->>FE: Continue to onboarding
-    FE->>BE: API call with Bearer token
-    BE->>SA: GET /auth/v1/user
-    SA-->>BE: Verified user id
-    BE-->>FE: Data scoped to that user id
-```
+### Zuri AI companion
 
-### 3.3 Placing an order
+Zuri answers questions, explains trading concepts and helps users think through trade plans. It can propose actions, but users remain responsible for confirming orders.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor U as Trader
-    participant FE as Trade ticket
-    participant BE as FastAPI
-    participant V as Credential vault
-    participant BR as Broker (Alpaca / OANDA / Tradier)
-    participant DB as Supabase
+**Mockup to create:** The Zuri AI chat panel over the workspace, showing a short question about risk and an educational response.
 
-    U->>FE: Fill ticket (or describe it to Zuri)
-    FE->>BE: GET /api/market-status
-    BE-->>FE: Market open or closed
-    alt Market closed
-        FE-->>U: Warning banner and acknowledgement
-    end
-    U->>FE: Tick confirmation (type CONFIRM LIVE if live)
-    FE->>BE: POST /api/brokers/{broker}/orders
-    BE->>V: Decrypt this user's credentials
-    BE->>BR: Submit order
-    BR-->>BE: Accepted / filled
-    BE->>DB: Record journey event, journal entry, chart snapshot
-    BE-->>FE: Result
-    FE-->>U: Confirmation, first-trade coach updates
-```
+### Broker and account settings
 
-### 3.4 The new-trader journey
+Users can link or disconnect supported broker accounts, adjust trading and risk preferences, and manage account settings. Broker credentials are encrypted before storage.
+
+**Mockup to create:** The Broker settings screen showing a connected paper account and its status; do not show API keys, account numbers or other personal data.
+
+## Development process
+
+Zuri brings trading tools and education into one workspace. The design combines a familiar trading-desk layout with guidance for users who may be unfamiliar with markets. The following sections explain the creative and technical choices represented in the current MVP.
+
+### Creative direction and theme
+
+- **A focused trading desk:** Dark backgrounds, raised panels and subdued borders separate the chart, order ticket and journal without competing with market data. The layout keeps navigation and frequently used tools visible.
+- **Meaningful colour:** Green and red distinguish market movements and trade actions, yellow highlights warnings, and purple identifies Zuri's AI guidance. Labels accompany colour so important information is not conveyed by colour alone.
+- **A supportive guide:** Zuri's conversational interface, guided tour and first-trade coach place explanations beside the task being performed rather than in a separate manual. Users can choose how much guidance they need.
+- **Practice before risk:** Paper-account onboarding, visible account-mode labels and explicit order confirmation make the distinction between practice and live trading clear. Estimates and unverified journal records are labelled rather than presented as confirmed results.
+
+### Technical decisions
+
+| Decision | Approach | Why it matters |
+|---|---|---|
+| **Interactive workspace** | Next.js and React render the chart, trade ticket, journal and assistant. | Keeps the main activities together in one browser-based interface. |
+| **Backend boundaries** | FastAPI handles broker adapters, AI requests and operations requiring server-side credentials. | Broker secrets and service-role access stay on the backend rather than in the browser. |
+| **Accounts and data** | Supabase Auth and PostgreSQL provide sessions and per-user storage, with row-level security for browser-accessible data. | Users can return to their own preferences, journal and journey across sessions. |
+| **Broker integration** | Broker-specific adapters translate account and trading operations to the relevant API. | The rest of the application can work with a common interface while respecting broker differences. |
+| **AI with user control** | Zuri explains and proposes; the user reviews and confirms an order. | Guidance supports learning without submitting trades independently. |
+| **Fill-aware journaling** | When enabled, Alpaca paper sync records confirmed fill activities separately from legacy automatic entries. | A submitted order is not assumed to be a completed fill. See [fill tracking](#alpaca-paper-fill-tracking) for setup and limitations. |
+
+### User flow
 
 ```mermaid
 flowchart TD
-    A([Land on Zuri]) --> B[Intro and sign-up]
-    B --> C[Verify email]
-    C --> D[Meet Zuri: experience, goals, style]
-    D --> E[Guided tour of the app]
-    E --> F[Link a paper broker with the 7-step guide]
-    F --> G[First-trade coach: place a paper trade]
-    G --> H[Close the position]
-    H --> I[Auto-captured journal entry and chart snapshot]
-    I --> J[History, Dashboard and weekly breakdown]
-    J --> K[Scanners, backtests and Analyse my journey]
-    K --> L([Repeat, with better habits])
+    A([Open Zuri]) --> B[Sign up or sign in]
+    B --> C[Complete onboarding and explore the guided tour]
+    C --> D[Link an Alpaca paper account]
+    D --> E[Explore charts and plan a trade with Zuri]
+    E --> F[Review and confirm a paper order]
+    F --> G{Broker reports a fill?}
+    G -- No --> H[Check pending orders or broker status]
+    G -- Yes --> I[Open the journal and sync fills]
+    I --> J[Review confirmed fills, notes and history]
+    J --> E
 ```
 
-### 3.5 Data model
+The confirmed-fill path shown here applies to configured Alpaca paper accounts; older automatic records may not represent fills.
+
+### System structure
+
+```mermaid
+flowchart LR
+    U[User] --> FE[Next.js and React frontend]
+    FE --> AUTH[Supabase Auth]
+    FE -->|user-scoped data| DB[(Supabase PostgreSQL)]
+    FE -->|authenticated requests| API[FastAPI backend]
+    API -->|verify session and access data| AUTH
+    API --> DB
+    API --> BROKER[Broker APIs]
+    API --> AI[AI provider]
+    FE --> CHART[TradingView chart]
+```
+
+The frontend accesses the user's own Supabase data under row-level security. The backend verifies sessions and handles broker credentials and AI integrations.
+
+### Core data relationships
+
+This simplified ERD focuses on the paper-trading and journal flow; it does not show every table.
 
 ```mermaid
 erDiagram
-    AUTH_USERS ||--|| PROFILES : has
-    AUTH_USERS ||--|| USER_PREFERENCES : has
-    AUTH_USERS ||--o{ WATCHLIST_ITEMS : owns
-    AUTH_USERS ||--o{ JOURNAL_ENTRIES : writes
+    AUTH_USERS ||--o| PROFILES : has
     AUTH_USERS ||--o{ BROKER_CONNECTIONS : links
-    AUTH_USERS ||--|| ZURI_JOURNEY : progresses
-    AUTH_USERS ||--o{ JOURNEY_EVENTS : generates
-    AUTH_USERS ||--o{ TRADE_SNAPSHOTS : captures
-    AUTH_USERS ||--o{ ZURI_MESSAGES : exchanges
-    AUTH_USERS ||--|| ZURI_MEMORY : remembers
-    AUTH_USERS ||--o{ ZURI_NUDGES : receives
-    AUTH_USERS ||--|| RESEARCH_STATE : saves
-
-    PROFILES { uuid id PK "display name, onboarding" }
-    USER_PREFERENCES { uuid user_id PK "display, chart, trading, risk" }
-    WATCHLIST_ITEMS { uuid user_id FK "ordered symbols" }
-    JOURNAL_ENTRIES { uuid user_id FK "plans, notes, auto-captured trades" }
-    BROKER_CONNECTIONS { uuid user_id FK "encrypted credentials, server-only" }
-    ZURI_JOURNEY { uuid user_id PK "mode, level, checklist" }
-    JOURNEY_EVENTS { uuid user_id FK "orders, chart views, watchlist changes" }
-    TRADE_SNAPSHOTS { uuid user_id FK "candles, levels, annotations" }
-    ZURI_MESSAGES { uuid user_id FK "redacted chat history" }
-    ZURI_MEMORY { uuid user_id PK "level, learned notes" }
-    ZURI_NUDGES { uuid user_id FK "proactive suggestions" }
-    RESEARCH_STATE { uuid user_id PK "scanners and backtest history" }
+    AUTH_USERS ||--o{ JOURNAL_ENTRIES : owns
+    AUTH_USERS ||--o{ ALPACA_FILL_CURSORS : owns
+    BROKER_CONNECTIONS o|--o{ ALPACA_FILL_CURSORS : tracks
+    ALPACA_FILL_CURSORS ||--o{ ALPACA_FILL_RECORDS : contains
+    JOURNAL_ENTRIES o|--o{ ALPACA_FILL_RECORDS : references
+    JOURNAL_ENTRIES o|--o{ TRADE_SNAPSHOTS : associated_with
 ```
 
-Every table is linked to `auth.users`, has row-level security enabled, and cascades on account deletion. `broker_connections` has **all browser access revoked**; only the backend can read it.
+Fill cursors retain their account checkpoint if a broker connection is disconnected; fill records can retain a null journal reference if an entry is deleted. Journal entries and snapshots also belong to a user.
+
+### Alpaca paper fill tracking
+
+`ALPACA_CONFIRMED_FILL_JOURNAL=true` switches Alpaca paper accounts from legacy order and position capture to confirmed-fill journal sync. It defaults to false. Apply the fill migration and deploy the compatible frontend before enabling it; validate the broker-to-database flow and monitoring first. Confirmed-fill snapshots and trade-level outcome analytics are not yet integrated. Other brokers and live accounts retain legacy capture.
+
+Each partial fill creates a separate journal entry; buy or sell does not indicate whether a position was opened or closed. The first cursor starts at the migration or account-link/change time, so earlier fills are not imported. Reconnecting the same account resumes its checkpoint. This cutoff can overlap older, unverified records, which are preserved. The journal counts confirmed fills among the latest 500 entries, so older or deleted entries may be missing. Use **Sync journal** again if a backlog is reported, and check broker history before relying on legacy records.
+
+For a dedicated paper-only staging environment, `ZURI_PAPER_ONLY=true` restricts broker access and new connections to Alpaca paper accounts and enables confirmed-fill sync. Existing unsupported accounts can be disconnected but not used. New orders require an available fill cursor; if storage or the migration is unavailable, the order is not submitted. This switch defaults to false; do not enable it on an existing live environment without a rollout plan.
+
+The protected reconciliation endpoint requires a server-only `ALPACA_FILL_RECONCILIATION_SECRET` of at least 32 bytes. [`supabase/paper_fill_scheduler.sql`](./supabase/paper_fill_scheduler.sql) is an opt-in setup script, not a migration or an active schedule. It requires Supabase Vault, `pg_net`, Vault secrets named `zuri_fill_backend_url` (HTTPS origin only) and `zuri_fill_reconciliation_secret` (matching the backend secret), and a separately configured `pg_cron` job. Dispatch is limited to ten accounts per run; pending requests are not repeated for three minutes, after which missing responses are retried. The service-only dispatch table reports the most recent response or failure, and `cron.job_run_details` reports job failures. `pg_net` queues requests asynchronously and its queue can expose decrypted authorization headers to database roles: audit and restrict database access before use. Queues and responses are unlogged and responses expire, so monitoring and periodic retries remain necessary.
+
+**Do not enable the scheduler yet.** Resolve remaining legacy-capture and end-to-end validation gaps before scheduling or releasing it. Background reconciliation is not configured in the live deployment; manual journal sync was verified for one paper fill.
+
+`backend.test_fill_integration` is an opt-in integration test for a disposable Docker container labelled `zuri.fill.integration=disposable`, with an isolated `zuri_fill_integration` database containing the initial, broker, journey-event and fill migrations. Set `ZURI_FILL_TEST_CONTAINER` to that container ID to run it. The test uses simulated Alpaca responses and a PostgreSQL-backed storage adapter, not Alpaca or PostgREST; it checks pending orders, partial fills and recovery after a committed response is lost. Never point it at a persistent database: it deletes its fixed test user.
+
 
 ---
 
-## 4. Technologies used
+## Final outcome
 
-| Layer | Technology | Why it was chosen |
+Zuri is available at [zuri-markets.vercel.app](https://zuri-markets.vercel.app). The MVP brings together guided onboarding, paper trading, market research, journaling and an AI companion.
+
+### Test results and coverage
+
+The following results were recorded on **10 November 2026** for the local code, including a disposable PostgreSQL fill-ledger integration test:
+
+| Check | Result | What it covers |
 |---|---|---|
-| **Frontend framework** | [Next.js 16](https://nextjs.org) (App Router, Turbopack) and [React 19](https://react.dev) | Fast dev loop, production builds, static and server rendering. |
-| **Language** | TypeScript 5 | Type safety across a large UI codebase. |
-| **Styling** | Tailwind CSS 4 plus hand-written CSS | A custom dark, trading-desk look. |
-| **Charts** | [TradingView](https://www.tradingview.com) embed and [Lightweight Charts](https://github.com/tradingview/lightweight-charts) 5 | Familiar live chart, plus our own snapshot rendering. |
-| **Backend** | [FastAPI](https://fastapi.tiangolo.com), Uvicorn, Pydantic 2 | Typed, fast, self-documenting API. |
-| **Database and auth** | [Supabase](https://supabase.com) (PostgreSQL, Auth, row-level security) | Managed Postgres with per-user security and PKCE auth. |
-| **AI** | [Groq](https://groq.com) (primary) with an optional OpenAI-compatible fallback (Gemini by default) | Low-latency responses, with automatic failover when rate limited. |
-| **Brokers** | Alpaca, OANDA, Tradier REST APIs | Free paper accounts for stocks, crypto and forex. |
-| **Market data** | Alpaca market data, Yahoo Finance chart feed, CNBC and BBC RSS | Real quotes, candles and headlines. |
-| **Credential security** | [`cryptography`](https://cryptography.io) (Fernet) | Authenticated encryption for stored broker keys. |
-| **Testing and linting** | `unittest` with FastAPI `TestClient`, ESLint 9, `tsc` | 135 backend tests plus strict frontend checks. |
+| Backend tests | **170 passed**, including the fill integration test; **36 subtests passed** | Authentication, broker logic, journal and fill tracking, and AI-agent behaviour. External broker responses are simulated in the integration test. |
+| Frontend tests | **12 passed** | Journal sync parsing, password recovery and setup, snapshot capture behaviour, and Zuri's visual interactions. |
+| Frontend quality | **ESLint, TypeScript and production build passed** | Static checks and a production build of the frontend. |
+| Live paper-trading check | **Passed for one test order** | An Alpaca paper order was placed, filled and displayed as a confirmed journal entry after syncing. |
 
----
+These are test results, **not a measured code-coverage percentage**. They do not establish that every feature, broker or new-user registration flow has been tested.
 
-## 5. Installation and setup
-
-Zuri has three parts that you set up once and then run together:
-
-1. **Database** (Supabase project and migrations)
-2. **Backend** (FastAPI on port `8000`)
-3. **Frontend** (Next.js on port `3000`)
-
-### 5.1 Prerequisites
-
-| Tool | Version | Notes |
-|---|---|---|
-| **Python** | 3.11 or newer | Developed and tested on 3.14. |
-| **Node.js** | 20.9 or newer | Developed and tested on 22. Includes `npm`. |
-| **Git** | any recent | |
-| **Supabase account** | free tier is fine | <https://supabase.com> |
-| **Groq API key** | free tier is fine | <https://console.groq.com>. Powers all Zuri AI features. |
-| **Alpaca paper account** | free | Optional for setup, needed to place trades. |
-
-### 5.2 Get the code
-
-```bash
-git clone https://github.com/Dhiali/Zuri.git
-cd Zuri
-```
-
-### 5.3 Database (Supabase)
-
-1. **Create a project** at <https://supabase.com/dashboard>.
-2. **Collect three values** from *Project Settings → API*:
-   - Project URL
-   - `anon` / publishable key (safe for the browser)
-   - `service_role` key (**secret, backend only**)
-3. **Apply every migration in order.** Open *SQL Editor*, then run each file in [`supabase/migrations/`](./supabase/migrations) **once, in timestamp order**:
-
-   | # | Migration | Creates |
-   |---|---|---|
-   | 1 | `20261023000000_initial_user_data.sql` | `profiles`, `user_preferences`, `journal_entries`, `watchlist_items` |
-   | 2 | `20261023000001_atomic_watchlist_update.sql` | Atomic watchlist update function |
-   | 3 | `20261023000002_backfill_existing_profiles.sql` | Profiles for pre-existing users |
-   | 4 | `20261023000003_add_workspace_preferences.sql` | Workspace preferences |
-   | 5 | `20261023000004_broker_connections.sql` | Encrypted `broker_connections` |
-   | 6 | `20261024000000_zuri_journey.sql` | `zuri_journey` |
-   | 7 | `20261024000001_journey_events.sql` | `journey_events` |
-   | 8 | `20261024000002_trade_snapshots.sql` | `trade_snapshots` |
-   | 9 | `20261025000000_community.sql` | Community tables |
-   | 10 | `20261027000000_zuri_memory.sql` | `zuri_messages`, `zuri_memory` |
-   | 11 | `20261028000000_zuri_agent.sql` | `zuri_facts`, `zuri_summaries`, `zuri_nudges` |
-   | 12 | `20261028000001_email_link_gate.sql` | Email-link verification gate |
-   | 13 | `20261028000002_block_experienced_journey.sql` | Journey guard |
-   | 14 | `20261028000003_journey_events_more_kinds.sql` | Extra event kinds |
-   | 15 | `20261028000004_research_state.sql` | `research_state` (scanners and backtests) |
-
-   > Never edit a migration that has been applied. Add a new timestamped file instead.
-
-4. **Configure authentication** in *Authentication*:
-   - **Providers**: enable **Email**, and optionally **Google** (see [Google sign-in](#google-sign-in-optional)).
-   - **URL Configuration**:
-     - *Site URL*: `http://localhost:3000`
-     - *Redirect URLs*: add `http://localhost:3000`, `http://127.0.0.1:3000`, `http://localhost:3000/email-verified` and `http://127.0.0.1:3000/email-verified`.
-   - **Email Templates**: paste [`confirm-signup.html`](./frontend/email-templates/confirm-signup.html) into *Confirm signup*, [`magic-link.html`](./frontend/email-templates/magic-link.html) into *Magic link or OTP*, and [`reset-password.html`](./frontend/email-templates/reset-password.html) into *Reset password*. Keep the `{{ .ConfirmationURL }}` placeholders in the first two templates and the `{{ .Token }}` placeholder in the reset template. Deploy the frontend with code-entry support and verify it before changing the reset template; the existing link-based template remains compatible during that transition. The logo is hosted at the production frontend URL; update the image URL if that domain changes.
-   - **Sessions** *(optional)*: disable the inactivity timeout, or set it above one day, so users stay signed in.
-5. **Confirm every migration landed** by running this in the SQL Editor. All rows should show `true`:
-
-   ```sql
-   select t as table_name, to_regclass('public.' || t) is not null as exists
-   from unnest(array[
-     'profiles','user_preferences','journal_entries','watchlist_items',
-     'broker_connections','zuri_journey','journey_events','trade_snapshots',
-     'zuri_messages','zuri_memory','zuri_facts','zuri_summaries','zuri_nudges',
-     'research_state'
-   ]) as t;
-   ```
-
-#### Google sign-in (optional)
-
-1. In Google Cloud Console, create an OAuth client of type **Web application**.
-2. Add `http://localhost:3000` and `http://127.0.0.1:3000` as authorised JavaScript origins.
-3. Add the callback URL shown in Supabase's Google provider settings as an authorised redirect URI.
-4. Paste the Google client ID and secret into Supabase's Google provider.
-
-### 5.4 Backend (FastAPI)
-
-Run all backend commands **from the repository root**.
-
-<details open>
-<summary><b>Windows (PowerShell)</b></summary>
+To rerun the backend unit tests from the repository root, use the virtual environment created above:
 
 ```powershell
-python -m venv backend\venv
-backend\venv\Scripts\Activate.ps1
-pip install -r backend\requirements.txt
-Copy-Item backend\.env.example backend\.env
+# Windows PowerShell
+backend\venv\Scripts\python.exe -m unittest backend.test_zuri_agent backend.test_main backend.test_fill_tracking
 ```
-</details>
-
-<details>
-<summary><b>macOS / Linux</b></summary>
-
-```bash
-python3 -m venv backend/venv
-source backend/venv/bin/activate
-pip install -r backend/requirements.txt
-cp backend/.env.example backend/.env
-```
-</details>
-
-Generate the **broker encryption key** and paste it into `backend/.env` as `BROKER_ENCRYPTION_KEY`:
-
-```bash
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-Fill in the rest of `backend/.env` (see [Environment variables](#6-environment-variables)), then start the server:
-
-```bash
-# development
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
-
-# production-style (no auto-reload, multiple workers)
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 2
-```
-
-Verify it is up: <http://127.0.0.1:8000/docs> shows the interactive API docs, and any private endpoint returns `401` without a token.
-
-> **Back up `BROKER_ENCRYPTION_KEY`.** If it is lost or changed, every stored broker credential becomes unreadable and users must re-link their brokers.
-
-### 5.5 Frontend (Next.js)
-
-```bash
-cd frontend
-npm install
-```
-
-Create `frontend/.env.local`:
 
 ```bash
 # macOS / Linux
-cp .env.example .env.local
-# Windows PowerShell
-Copy-Item .env.example .env.local
+backend/venv/bin/python -m unittest backend.test_zuri_agent backend.test_main backend.test_fill_tracking
 ```
 
-Fill in the three `NEXT_PUBLIC_*` values, then choose an environment:
-
-| Environment | Command | Notes |
-|---|---|---|
-| **Development** | `npm run dev` | Hot reload at <http://localhost:3000>. |
-| **Production build** | `npm run build` then `npm start` | Optimised build; fails on type errors. |
-| **Quality checks** | `npm run lint` and `npx tsc --noEmit` | Run before committing. |
-
-### 5.6 Environment profiles
-
-| | **Local development** | **Staging / production** |
-|---|---|---|
-| Frontend URL | `http://localhost:3000` | Your HTTPS domain |
-| Backend URL | `http://127.0.0.1:8000` | Your HTTPS API domain |
-| `NEXT_PUBLIC_BACKEND_URL` | `http://127.0.0.1:8000` | Your public API URL |
-| `FRONTEND_ORIGINS` | defaults to localhost | Your exact frontend origin(s) |
-| Supabase *Site URL* and redirects | localhost entries | Your production URLs only |
-| Backend process | `--reload` | No `--reload`, run behind a TLS-terminating reverse proxy |
-| Broker mode | Paper accounts | Paper by default, live only with `CONFIRM LIVE` |
-| Email sender | Supabase built-in (testing only) | Custom SMTP on a verified domain |
-
-> A Vercel production frontend deployment exists, but the complete deployed system has not been verified. Before a release, confirm the production origins above, HTTPS, rate limiting at the proxy or gateway, and the frontend Content-Security-Policy. See [Security](#9-security).
-
-### 5.7 Start everything
-
-Open two terminals from the repository root:
+For frontend checks:
 
 ```bash
-# Terminal 1: backend
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
-
-# Terminal 2: frontend
-cd frontend && npm run dev
-```
-
-Then open <http://localhost:3000>.
-
----
-
-## 6. Environment variables
-
-### Backend: `backend/.env`
-
-| Variable | Required | Description |
-|---|---|---|
-| `SUPABASE_URL` | Yes | Your Supabase project URL. |
-| `SUPABASE_ANON_KEY` | Yes | Publishable / anon key, used to verify user tokens. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | **Secret.** Server-side key for scoped writes, broker credentials and account deletion. Never expose it. |
-| `BROKER_ENCRYPTION_KEY` | Yes | Fernet key that encrypts stored broker credentials. |
-| `GROQ_API_KEY` | Yes | Powers all Zuri AI features. |
-| `FALLBACK_AI_API_KEY` | No | Backup AI used when Groq is rate limited or down. |
-| `FALLBACK_AI_BASE_URL` | No | OpenAI-compatible endpoint. Defaults to Google Gemini. |
-| `FALLBACK_AI_MODEL` | No | Model for the fallback provider. |
-| `FALLBACK_AI_VISION_MODEL` | No | Vision model for screenshot analysis, if different. |
-| `FRONTEND_ORIGINS` | No | Comma-separated allowed browser origins. Defaults to `http://localhost:3000,http://127.0.0.1:3000`. |
-
-### Frontend: `frontend/.env.local`
-
-| Variable | Required | Description |
-|---|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Same project URL as the backend. |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Publishable / anon key. **Never put the service role key here.** |
-| `NEXT_PUBLIC_BACKEND_URL` | No | Backend base URL. Defaults to `http://127.0.0.1:8000`. |
-
-Both `.env` files are gitignored. Only the `.env.example` templates are committed.
-
----
-
-## 7. Usage guide
-
-### 7.1 Getting started as a new user
-
-1. **Open** <http://localhost:3000>. A short product introduction appears.
-2. **Sign up** with email or Google. Open the verification email and click **Verify my email**. A thank-you page confirms it, and you can return to your original Zuri tab.
-3. **Meet Zuri.** Answer a few questions about your experience and goals, then pick **Training buddy** (explains as it goes) or **Assistant** (terse and fast).
-4. **Take the tour.** Zuri highlights each area of the app in turn. You can exit at any time.
-5. **Link a practice broker.** On the Dashboard, press **Do it with me** on the next-move card. The 7-step guide walks you through creating free Alpaca paper keys, and moves to the last step automatically when your broker is linked.
-6. **Place your first trade** with the first-trade coach, then close it.
-7. **Review** your trade in **History**, **Journal** and **Dashboard**.
-
-### 7.2 Navigating the app
-
-The left menu has six sections. The top bar always shows your broker mode (for example `ALPACA · PAPER`) and whether the US market is open.
-
-| Section | What it is for |
-|---|---|
-| **Charts** | Live chart, watchlist, market briefing, scanners and historical reviews. |
-| **Dashboard** | Your balance, Zuri's best next move, weekly breakdown and free courses. |
-| **Trade** | The order ticket, open positions and pending orders. |
-| **History** | Closed trades, orders and positions, with chart snapshots and CSV export. |
-| **Journal** | Auto-captured and personal notes, plus the AI leak finder. |
-| **Settings** | Account, Broker, Trading, Risk, Platform, Display and Security. |
-
-The floating **Zuri** assistant is available on every screen. Ask it anything about the app or a market, or ask it to walk you through a task.
-
-### 7.3 Key features in detail
-
-#### Placing a trade
-1. Open **Trade** and choose a **symbol** (for example `BTCUSD` or `AAPL`).
-2. Pick **Buy** or **Sell**, an order type and a size. Add a **stop-loss** and **take-profit**, or press **Suggest levels** for Zuri to propose them from recent candles.
-3. Read the **risk summary**. Position size is capped against your account risk limits.
-4. If the market is closed, an **amber banner** explains what will happen: Alpaca and Tradier queue the order until the open, OANDA rejects it, and crypto never closes.
-5. Tick the **confirmation box** (live accounts also require typing `CONFIRM LIVE`) and submit.
-6. Manage the result under **Open positions** and **Pending orders**. Use **Close** on a position, or **Cancel** on a pending order.
-
-You can also type the trade in plain English ("buy 0.001 bitcoin with a 2% stop") and Zuri will fill the ticket for you to review.
-
-#### Building a scanner
-1. Open **Charts** and find **Build a scanner with Zuri**.
-2. Describe a condition, for example *"Alert me when BTCUSD RSI crosses above 70 on the 15 minute chart"*.
-3. Press **Draft with Zuri** and review the rule it proposes.
-4. Press **Activate scanner**. It checks your broker's candles once a minute while Zuri is open. Scanners only watch and alert; they never place orders.
-
-#### Running a historical review
-1. In **Charts**, open **Backtest a setup or event**.
-2. Choose a symbol, date range, signal (breakout, moving-average cross or RSI cross), direction, lookback and holding period.
-3. Press **Run historical review**. Results show signal count, average return and the share of positive outcomes.
-4. Past runs are saved under **Backtest history** where you can **View**, **Run again** or **Delete** them.
-
-> Reviews use real broker candles but are **not** a simulation of fills, and they exclude fees, slippage and spreads. Past results do not predict future performance.
-
-#### Using the Journal and leak finder
-- Every trade placed through Zuri creates an **auto-captured** entry with a chart snapshot. Positions opened elsewhere are detected from your broker.
-- Press **Ask Zuri to write the note** to draft the reasoning behind a trade from your recorded timeline.
-- Press **Analyse my journey** for a report on patterns such as trades without a stop-loss, planning rate, position size and win rate. Patterns are marked tentative when the sample is small.
-
-#### Reviewing chart snapshots
-In **History** or on a journal entry, open a snapshot to see the 15-minute candles with your entry, stop and target lines. Press **Annotate with Zuri** for support, resistance and stop-placement notes, switch on **Practice mode** to guess before the annotations are revealed, or **Download PNG**.
-
-#### Linking or switching a broker
-Open **Settings → Broker**, press **Link account** next to Alpaca, OANDA or Tradier and enter the keys you created in that broker's dashboard. Credentials are validated, encrypted and never shown again. **Disconnect** deletes them.
-
-> Use API keys with trading permission only. Never enable withdrawals.
-
-#### Managing your account
-**Settings → Account** edits your display name and email. **Settings → Security** handles your password and **Delete account**, which permanently removes your login and all your data.
-
----
-
-## 8. UI mockups
-
-The wireframes below show the layout of the main screens. They are structural mockups, not pixel-exact screenshots.
-
-### 8.1 Application shell
-
-```text
-+--------------------------------------------------------------------------------+
-| zuri.   NYSE / NASDAQ   [ALPACA - PAPER]  US MARKET CLOSED - opens in 10h   Sign out |
-+---------------+----------------------------------------------------------------+
-|  Charts       |  PERSONAL TRADING DESK - WED, OCT 28                           |
-|  Dashboard    |                                                                |
-|  Trade        |                  ( active section renders here )               |
-|  History      |                                                                |
-|  Journal      |                                                                |
-|  Settings     |                                                  +-----------+ |
-|               |                                                  |  Zuri  Z  | |
-|               |                                                  | assistant | |
-+---------------+--------------------------------------------------+-----------+-+
-| Paper trading: ON         Trading: OFF         All systems operational         |
-+--------------------------------------------------------------------------------+
-```
-
-### 8.2 Dashboard
-
-```text
-+--------------------------------------------------------------------------------+
-| Good morning, dee                                                              |
-+--------------------------------------------------------------------------------+
-| ZURI - YOUR BEST NEXT MOVE                                      [Re-check]     |
-| Let's link your practice broker account                                        |
-| Linking an Alpaca paper account is the essential next step ...                 |
-| [ Do it with me ]   [ Take a quick tour of the app ]                           |
-+---------------------------------------+----------------------------------------+
-| BROKER ACCOUNT                        | ZURI COACHING                          |
-| Paper account    Balance  $100,000    | Weekly breakdown                       |
-| Equity / Cash / Open positions        |   1 closed trade   -0.06               |
-|                                       |   Win rate / Average hold              |
-+---------------------------------------+----------------------------------------+
-| LEARN - CHOSEN FOR YOU - NEW TO TRADING                                        |
-|  School of Pipsology      Stocks and bonds       TradingView trade ideas       |
-|  (free course)            (free course)          (free course)                 |
-+--------------------------------------------------------------------------------+
-```
-
-### 8.3 Charts
-
-```text
-+------------------------------------------------------+-------------------------+
-| BTCUSD   80,794   -0.01% today    [1m][15m][1h][1D]  | Quotes (delayed <=15m)  |
-|                                                      |  BTCUSD  80,794  -0.01% |
-|        TradingView live chart (candles)              |  ETHUSD  ...            |
-|                                                      |  AAPL    ...            |
-+------------------------------------------------------+-------------------------+
-| MARKET NEWS - Zuri market intelligence               | AI SCANNERS             |
-|  headline - source - time        [Ask Zuri]          |  [ Describe a rule... ] |
-|  headline - source - time        [Ask Zuri]          |  [ Draft with Zuri ]    |
-+------------------------------------------------------+-------------------------+
-| BACKTEST A SETUP OR EVENT                                                      |
-|  Pair [BTCUSD] From [..] To [..] Signal [Breakout] Direction [up] Lookback [20]|
-|  [ Run historical review ]                                                     |
-|  RUN       SETUP            RANGE         SIGNALS  AVG RETURN  POSITIVE        |
-|  10/28     BTCUSD 15m ...   2026-07-30..  399      +0.01%      41.4%   [View]  |
-+--------------------------------------------------------------------------------+
-```
-
-### 8.4 Trade ticket
-
-```text
-+----------------------------------------+---------------------------------------+
-| ORDER TICKET                           | OPEN POSITIONS                        |
-|  Symbol [BTCUSD v]   (Buy) (Sell)      |  BTCUSD  0.001  +0.02   [Close]       |
-|  Type   [Market v]   Size [0.001]      +---------------------------------------+
-|  Stop-loss [..]  Take-profit [..]      | PENDING ORDERS                        |
-|  [ Suggest levels ]                    |  GLD  buy limit  1   [Cancel]         |
-|                                        +---------------------------------------+
-|  ! US market closed - order will queue |                                       |
-|  [x] I understand and want to send it  |                                       |
-|  [ Place order ]                       |                                       |
-+----------------------------------------+---------------------------------------+
-```
-
-### 8.5 Journal and snapshots
-
-```text
-+--------------------------------------------------------------------------------+
-| JOURNAL                                 SAVED TO YOUR ACCOUNT   [Analyse my journey] |
-+--------------------------------------------------------------------------------+
-| BTCUSD - Buy 0.001 - auto-captured        10/28 02:31                          |
-|   +--------------------------------------------+                               |
-|   |  15m candles with ENTRY / STOP / TARGET    |   [Annotate with Zuri]        |
-|   +--------------------------------------------+   [Practice mode] [Download PNG] |
-|   Zuri: price held support near ...                                            |
-|   Estimated result: -0.04 (from the price when you closed)                     |
-+--------------------------------------------------------------------------------+
-```
-
----
-
-## 9. Security
-
-Security is treated as a first-class feature. A full review of the repository found no high or critical vulnerabilities.
-
-| Area | What is in place |
-|---|---|
-| **Authentication** | Supabase Auth with email verification and Google, PKCE flow, automatic token refresh. |
-| **API authorisation** | Every private endpoint verifies the bearer token with Supabase and scopes all queries to the verified user id. UUID path parameters are validated. |
-| **Database** | Row-level security on every table with per-user policies. A restrictive policy gates features until the email link is confirmed. |
-| **Broker credentials** | Validated against the broker, encrypted with Fernet, stored in a table with all browser grants revoked, and never returned to the frontend. |
-| **Trading safeguards** | Explicit confirmation on every order. Live accounts also require the typed phrase `CONFIRM LIVE`. The AI can only propose orders. |
-| **AI safety** | News, memory and screenshots are passed to the model as untrusted data. Secret-looking tokens are redacted from stored chat history. |
-| **SSRF and injection** | Server-side fetches only go to fixed hosts. Article links are checked against an allowlist. Broker account IDs are validated before use in URLs. |
-| **Web hardening** | CORS restricted to an origin allowlist. Security headers (`nosniff`, frame denial, referrer policy, HSTS, permissions policy and a Content-Security-Policy) on the app and the API. No unsafe HTML rendering. |
-| **Secrets** | `.env` files are gitignored, and no secret has ever been committed. Only `.env.example` templates are tracked. |
-
-**Before a real deployment:** serve over HTTPS, add rate limiting, restrict allowed origins to your real domain, tighten the frontend CSP with a script policy tuned for the TradingView widget, and consider requiring recent sign-in before account deletion or password changes. Also verify in the Supabase dashboard that email confirmation is required and password rules are strong.
-
-To report a vulnerability, please contact the repository owner privately rather than opening a public issue.
-
----
-
-## 10. Testing and quality
-
-```bash
-# Backend: 135 tests (from the repository root)
-python -m unittest backend.test_zuri_agent backend.test_main
-
-# Frontend: lint, type check, production build
 cd frontend
 npm run lint
 npx tsc --noEmit
+node --test
 npm run build
 ```
 
-The backend tests mock the AI and broker calls, so they need no network access or keys, and they cover authentication, broker logic, closed-market handling, symbol normalisation, scanner validation, security headers and the Zuri agent.
+The PostgreSQL fill integration test is opt-in and requires a disposable Docker database; see [fill tracking](#alpaca-paper-fill-tracking).
 
----
+### Demo video
 
-## 11. Project structure
+The demo video is **coming soon**. Its link will be added here when available; the planned walkthrough covers sign-in, the dashboard, paper trading, the journal and Zuri AI.
 
-```text
-Zuri/
-├── backend/                    FastAPI service
-│   ├── main.py                 API routes, auth, AI orchestration
-│   ├── brokers.py              Alpaca / OANDA / Tradier adapters, credential vault
-│   ├── zuri_agent.py           Tour, walkthroughs, memory and nudges
-│   ├── coaching.py             Weekly breakdown and free learning resources
-│   ├── journal.py              Journey events and journal analytics
-│   ├── sizing.py               Position-size and risk maths
-│   ├── requirements.txt        Python dependencies
-│   ├── .env.example            Backend configuration template
-│   └── test_*.py               Backend test suites
-├── frontend/                   Next.js application
-│   ├── app/
-│   │   ├── page.tsx            Workspace shell and Trade view
-│   │   ├── auth.tsx            Sign-in, sign-up and intro
-│   │   ├── zuri-*.tsx          Onboarding, tour, guide, assistant
-│   │   ├── chart-research.tsx  Scanners and historical reviews
-│   │   ├── history-view.tsx    History tables and exports
-│   │   ├── journal-insights.tsx / trade-snapshots.tsx
-│   │   ├── broker-connections.tsx / pending-orders.tsx
-│   │   ├── user-data.ts        Supabase data helpers
-│   │   └── globals.css         Application styles
-│   ├── email-templates/        Branded confirmation and reset emails
-│   ├── public/                 Static assets
-│   └── .env.example            Frontend configuration template
-├── supabase/
-│   └── migrations/             Timestamped SQL schema migrations
-└── README.md
-```
+## Conclusion
 
----
+Zuri demonstrates how an educational trading workspace can combine practice, reflection and AI guidance without removing the user's control over orders.
 
-## 12. API reference
+### Highlights
 
-The backend serves interactive docs at `http://127.0.0.1:8000/docs`. All endpoints except `GET /api/market-news` require `Authorization: Bearer <Supabase access token>`.
+- **A connected learning journey:** onboarding, charts, a paper-trading ticket and a journal bring learning into the same workspace as practice.
+- **A verified paper-trade flow:** one live Alpaca paper order was placed, filled and displayed in the journal after syncing.
+- **Guidance with user control:** Zuri can explain concepts and suggest plans, while order submission requires the user's confirmation.
 
-| Group | Endpoints |
+### Challenges and responses
+
+| Challenge | Response and current status |
 |---|---|
-| **Account** | `POST /api/user/confirm-email-link`, `POST /api/user/password`, `DELETE /api/user/account` |
-| **Brokers** | `GET /api/brokers`, `POST /api/brokers/link`, `DELETE /api/brokers/{broker}`, `GET /api/brokers/{broker}/account`, `POST /api/brokers/{broker}/orders` |
-| **Trading** | `GET /api/account`, `GET /api/positions`, `GET /api/orders`, `DELETE /api/orders/{id}`, `DELETE /api/positions/{symbol}`, `DELETE /api/close-all`, `GET /api/market-status`, `POST /api/parse-trade`, `POST /api/trade/converse`, `POST /api/trade/suggest-levels` |
-| **Market data** | `GET /api/quotes`, `GET /api/market-news`, `GET /api/market-history` |
-| **Research** | `POST /api/scanners/configure` |
-| **History and snapshots** | `GET /api/history`, `GET /api/snapshots`, `POST /api/snapshots/{id}/annotate`, `GET` and `POST /api/snapshots/{id}/screenshot`, `DELETE /api/snapshots/{id}` |
-| **Journal** | `POST /api/journal/events`, `POST /api/journal/sync`, `GET /api/journal/insights`, `POST /api/journal/analyze`, `POST /api/journal/entries/{id}/ai-note` |
-| **Dashboard** | `GET /api/dashboard/coaching`, `POST /api/dashboard/coach-note` |
-| **Zuri agent** | `POST /api/assistant/chat`, `POST /api/zuri/greeting`, `/guide`, `/onboarding`, `/onboarding/preferences`, `/next-step`, `/events`, `GET /api/zuri/nudges`, `POST /api/zuri/nudges/{id}/dismiss`, `GET` and `DELETE /api/zuri/memory` |
+| Making trading approachable for beginners | Added guided onboarding, paper-account setup and contextual AI explanations. Further usability testing is needed. |
+| Keeping journal records accurate | Added confirmed Alpaca paper-fill syncing and labelled older automatic records as unverified. Background reconciliation and complete trade-level analytics remain future work. |
+| Protecting accounts and broker credentials | Used per-user access controls, server-side credential encryption and explicit order confirmation. Further deployment hardening and monitoring are needed. |
+| Working across external services | Separated broker and AI integrations behind the backend and tested key flows with simulated responses and a live paper order. Other broker integrations still need end-to-end verification. |
 
----
+### Future plans and improvements
 
-## Deployment
+- Complete and monitor background fill reconciliation, and connect confirmed fills to snapshots and trade-level insights.
+- Expand end-to-end testing, including new-user registration, other brokers and orders queued outside market hours.
+- Strengthen production readiness with monitoring, rate limiting, tighter security policies and a repeatable staging-to-production release process.
+- Improve learning guidance and accessibility using feedback from real users.
+- Explore background scanner alerts and improve the clarity of estimated versus confirmed results.
 
-- **Backend (Render):** [render.yaml](render.yaml) defines the FastAPI service. Create a Blueprint from this repo, then fill in the secret variables. Its root directory is `backend`, so the start command uses `uvicorn backend.main:app --app-dir .. --host 0.0.0.0 --port $PORT` to load the backend as a package. The backend needs a persistent host because it uses background threads for chart snapshots.
-- **Frontend (Vercel):** import the repo, set the root directory to `frontend`, and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `NEXT_PUBLIC_BACKEND_URL` (the Render URL).
-- **Then:** add the Vercel URL to the backend's `FRONTEND_ORIGINS`, and add `<vercel-url>/email-verified` to the Supabase *Redirect URLs* and *Site URL*.
+**Current limitations:** OANDA and Tradier have not been verified end to end with real keys. Queued stock orders have not been observed filling at market open. Quotes can be delayed, historical reviews are not simulated fills, and scanners run only while the app is open. Legacy journal records can represent unfilled orders, and journal estimates can differ from broker history. News-feed commercial permissions have not been confirmed. Zuri is educational software, not financial advice.
 
----
+## License, contact and acknowledgments
 
-## 13. Known limitations
+**Copyright © 2026 Dhiali. All rights reserved.** No permission to use, copy, modify or distribute this project is granted by this notice.
 
-Zuri is an **MVP**. These are known and deliberate:
+**Contact:** [Dhiali on GitHub](https://github.com/Dhiali)
 
-- **Deployment readiness.** The Vercel frontend has production deployments, but the deployed frontend, backend, database and broker flow have not been verified together. A production release needs HTTPS, real origins, rate limiting and a tuned Content-Security-Policy.
-- **Broker coverage.** Alpaca (stocks and crypto) is the most thoroughly tested. OANDA and Tradier are implemented but were not verified end to end with real keys.
-- **Queued stock orders** placed while the market is closed were not observed filling at the open.
-- **Automatic journal entries and chart snapshots can be created when an order is submitted, before it fills.** A cancelled or unfilled order may therefore appear as a trade. Check the broker's order and fill status before relying on these records.
-- **P&L can differ slightly** between the Journal and History for the same trade. The Journal estimates from the price at close, while History pairs the real fills.
-- **Scanners run only while Zuri is open** in a browser tab. There is no background alerting.
-- **Quotes** come from public feeds and can be delayed by up to about 15 minutes. The chart uses TradingView's own feed.
-- **Historical reviews** are signal examples, not simulated fills.
-- **News feeds** (CNBC and BBC RSS) have not been cleared for commercial use. Review each publisher's terms before a commercial launch.
-- **Not financial advice.** Zuri is an educational tool. It does not give investment advice or predict prices.
-
----
-
-## 14. Troubleshooting
-
-| Problem | Likely cause and fix |
-|---|---|
-| Backend fails with `No time zone found` on Windows | Install dependencies from `backend/requirements.txt`; it includes `tzdata`. |
-| Frontend shows network or CORS errors | Make sure the backend is running, `NEXT_PUBLIC_BACKEND_URL` is correct, and the frontend origin is listed in `FRONTEND_ORIGINS`. |
-| Verification link opens the wrong page | Add `/email-verified` for both `localhost` and `127.0.0.1` to Supabase *Redirect URLs*. |
-| Saving journal, scanners or backtests fails | A migration is missing. Run the verification query in [section 5.3](#53-database-supabase). |
-| Broker link says credentials are invalid | Check for a missing character, that you used **paper** keys for a paper account, and that the key was not regenerated. |
-| Stored broker accounts stopped working | `BROKER_ENCRYPTION_KEY` was changed or lost. Restore it, or have users re-link. |
-| AI replies say Zuri is out of thinking allowance | The Groq rate limit was hit. Wait a moment, or configure a fallback AI provider. |
-| Backend changes do not appear | Backend runs without auto-reload by default. Restart it, or start it with `--reload`. |
-
----
-
-## 15. Demo video
-
-> Demo video: **coming soon** (5-8 minutes: sign-in, dashboard navigation, and create/read/update/delete of journal entries and scanners).
-
----
-
-## 16. Team and contributions
-
-| Member | Contribution |
-|---|---|
-| **Dhiali** | Solo project: concept, UX and branding, Next.js frontend, FastAPI backend, Supabase schema and security, AI agent design, testing and documentation. |
-
----
-
-## 17. Acknowledgements
-
-- [Groq](https://groq.com) and Google Gemini for the AI services.
-- [Supabase](https://supabase.com) for authentication and the database.
-- [Alpaca](https://alpaca.markets), [OANDA](https://www.oanda.com) and [Tradier](https://tradier.com) for broker APIs.
-- [TradingView](https://www.tradingview.com) for the charting widget and Lightweight Charts.
-- CNBC and BBC for public news feeds.
-- The Interactive Development 300 lecturers and peers for feedback.
-
----
-
-<div align="center">
-
-**Zuri Markets**: your market, in focus.
-
-*Educational software. Trading involves risk, and past performance does not guarantee future results.*
-
-</div>
+**Acknowledgments:** Thank you to Tsungai Katsuro and William Basson, the Stack Overflow community, and the teams behind Gemini and GitHub Copilot for their support and resources during Zuri's development.
