@@ -747,7 +747,7 @@ The backend serves interactive docs at `http://127.0.0.1:8000/docs`. All endpoin
 
 ## Deployment
 
-- **Backend (Render):** [render.yaml](render.yaml) defines the FastAPI service. Create a Blueprint from this repo, then fill in the secret variables. The backend needs a persistent host because it uses background threads for chart snapshots.
+- **Backend (Render):** [render.yaml](render.yaml) defines the FastAPI service. Create a Blueprint from this repo, then fill in the secret variables. Its root directory is `backend`, so the start command uses `uvicorn backend.main:app --app-dir .. --host 0.0.0.0 --port $PORT` to load the backend as a package. The backend needs a persistent host because it uses background threads for chart snapshots.
 - **Frontend (Vercel):** import the repo, set the root directory to `frontend`, and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `NEXT_PUBLIC_BACKEND_URL` (the Render URL).
 - **Then:** add the Vercel URL to the backend's `FRONTEND_ORIGINS`, and add `<vercel-url>/email-verified` to the Supabase *Redirect URLs* and *Site URL*.
 
