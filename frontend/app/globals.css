@@ -38,7 +38,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .market-strip { display: flex; align-items: center; gap: 9px; color: #bec4c2; font-size: 11px; letter-spacing: .3px; }
 .live-dot, .chart-live i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px #48c9a055; }
 .strip-separator { color: #525b5c; }
-.market-open { margin-left: 5px; padding: 4px 7px; color: var(--green); background: #163128; border: 1px solid #24483d; border-radius: 3px; font-size: 9px; letter-spacing: .5px; }
+.market-open { margin-left: 5px; padding: 4px 7px; color: var(--green); background: #163128; border: 1px solid #24483d; border-radius: 3px; font-size: 9px; letter-spacing: .5px; cursor: pointer; }
+.market-open:hover { background: #1d4034; }
 .market-clock { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 3px; font-size: 9px; letter-spacing: .5px; white-space: nowrap; }
 .market-clock i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .market-clock.open { color: var(--green); background: #163128; border: 1px solid #24483d; }
@@ -864,6 +865,8 @@ td b { font-weight: 580; }
 .zuri-shake { animation: zuri-shake 1s ease-in-out 1; }
 .zuri-mascot { animation: zuri-glow 3.4s ease-in-out infinite alternate, zuri-bounce 3.6s ease-in-out infinite; }
 .zuri-mascot * { transform-box: fill-box; transform-origin: center; }
+.zuri-gaze { translate: 0 0; transition: translate .35s ease-in-out; }
+.zuri-figure[data-zuri-glancing] .zuri-gaze { translate: var(--zuri-glance-x) var(--zuri-glance-y); }
 .zuri-eye, .zuri-brow { transition: transform .35s cubic-bezier(.3, 1.4, .5, 1), opacity .3s; }
 .zuri-blink { animation: zuri-blink 4.5s infinite; }
 .zuri-brow { opacity: .5; }
@@ -892,7 +895,7 @@ td b { font-weight: 580; }
 @keyframes zuri-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 @keyframes zuri-blink { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(.1); } }
 @keyframes zuri-twinkle { from { opacity: .35; transform: scale(.9); } to { opacity: 1; transform: scale(1.08); } }
-@media (prefers-reduced-motion: reduce) { .zuri-mascot, .zuri-blink, .zuri-move, .zuri-sparkles, .zuri-halo, .zuri-emote { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .zuri-mascot, .zuri-blink, .zuri-move, .zuri-sparkles, .zuri-halo, .zuri-emote { animation: none; } .zuri-gaze { transition: none; translate: 0 0 !important; } }
 
 .zuri-top { display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border-radius: 12px; }
 .zuri-top.is-away .zuri-figure { opacity: 0; }
@@ -1736,4 +1739,3 @@ td { height: 44px; font-size: 12px; }
 .zuri-onb-body::-webkit-scrollbar, .zuri-onb-thread::-webkit-scrollbar, .zuri-guide-body::-webkit-scrollbar, .zuri-takeover-card::-webkit-scrollbar { width: 8px; }
 .zuri-onb-body::-webkit-scrollbar-thumb, .zuri-onb-thread::-webkit-scrollbar-thumb, .zuri-guide-body::-webkit-scrollbar-thumb, .zuri-takeover-card::-webkit-scrollbar-thumb { background: #4a4260; border-radius: 8px; }
 .zuri-onb-body::-webkit-scrollbar-track, .zuri-onb-thread::-webkit-scrollbar-track, .zuri-guide-body::-webkit-scrollbar-track, .zuri-takeover-card::-webkit-scrollbar-track { background: transparent; }
-

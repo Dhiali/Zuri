@@ -57,7 +57,11 @@ export function useSnapshots(token: string, refreshKey: number) {
 
 // Called right after an order. Grabs the real screen immediately (if the user is sharing), then attaches it
 // to the snapshot once the server has created it.
-export function captureScreenForTrade(token: string, symbol: string, onDone: () => void) {
+export function captureScreenForTrade(token: string, symbol: string, onDone: () => void, legacySnapshotExpected = true) {
+  if (!legacySnapshotExpected) {
+    onDone();
+    return;
+  }
   const frame = grabScreenFrame();
   const upper = symbol.toUpperCase();
   let attempts = 0;
@@ -169,6 +173,7 @@ function SnapshotCard({ snapshot, token, onChanged }: { snapshot: TradeSnapshot;
         <div><span className="small-label">{kindName[snapshot.kind].toUpperCase()} SNAPSHOT · 15m</span><h3>{snapshot.symbol} {snapshot.side && <span className={`side-pill ${snapshot.side === "sell" ? "short" : "long"}`}>{snapshot.side === "sell" ? "Sell" : "Buy"}</span>}</h3></div>
         <div className="journal-entry-actions"><time dateTime={snapshot.created_at}>{formatDateTime(snapshot.created_at)}</time><button className="text-action" onClick={() => void run("delete", async () => { await api(token, `/api/snapshots/${snapshot.id}`, { method: "DELETE" }); onChanged(); })}>Delete</button></div>
       </div>
+      <p className="muted">Unverified snapshot: an order may not have filled, and the shown price may be an estimate rather than the execution price. Check the broker&apos;s fill history.</p>
       <SnapshotChart snapshot={snapshot} reveal={reveal} onReady={onReady} />
       {reveal && typeof pl === "number" && <p className={pl >= 0 ? "positive" : "negative"}>Estimated result: {pl >= 0 ? "+" : ""}{pl.toFixed(2)}</p>}
       {practice && !revealed && <div className="snapshot-practice"><p>Practice: look at the chart. Where would you place the stop? Is this a good {snapshot.kind === "exit" ? "exit" : "entry"}?</p><button className="solid-button" onClick={() => setRevealed(true)}>Reveal Zuri&apos;s annotations</button></div>}
@@ -214,7 +219,7 @@ export function SnapshotGallery({ token, refreshKey, entryId, showControls = tru
       {showControls && <ScreenShareControl />}
       {status === "loading" && <p className="auth-message">Loading snapshots…</p>}
       {status === "error" && <p className="auth-message" role="alert">{error}</p>}
-      {status === "ready" && visible.length === 0 && <div className="content-card journal-empty"><span className="small-label">NO SNAPSHOTS YET</span><p>When you place or close a trade, Zuri saves the chart around that moment and annotates it here. Stock charts are supported now; other markets show when your broker provides candles.</p></div>}
+      {status === "ready" && visible.length === 0 && <div className="content-card journal-empty"><span className="small-label">NO SNAPSHOTS YET</span><p>When you submit an order or request a position close, Zuri may save and annotate a chart. Snapshots and prices are not verified fills; check your broker&apos;s fill history. Stock charts are supported now; other markets show when your broker provides candles.</p></div>}
       {visible.map((snapshot) => <SnapshotCard key={snapshot.id} snapshot={snapshot} token={token} onChanged={reload} />)}
     </section>
   );

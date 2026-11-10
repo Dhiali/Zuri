@@ -80,6 +80,7 @@ export function TradeConversation({ token, symbol, riskPercent, ready, onUsePlan
           {busy && <p className="convo-zuri convo-typing">Zuri is thinking…</p>}
           <div ref={endRef} />
         </div>
+        <p className="muted">Zuri can make mistakes. Stop orders do not guarantee an execution price or cap losses; check your broker&apos;s terms.</p>
         {plan && (
           <div className="trade-plan">
             <div className="trade-plan-head"><b>{plan.side === "buy" ? "Buy" : "Sell"} {plan.symbol}</b><span>{plan.levels_source === "zuri" ? "Zuri chose the stop and target from recent price swings" : "Using your levels"}</span></div>
@@ -89,7 +90,7 @@ export function TradeConversation({ token, symbol, riskPercent, ready, onUsePlan
                 <span>Entry (approx.)<b>{plan.price}</b></span>
                 <span>Stop<b>{plan.stop_loss}</b></span>
                 <span>Target<b>{plan.take_profit}</b></span>
-                <span>Risk<b>{money(plan.actual_risk)} ({plan.risk_percent}%)</b></span>
+                <span>Estimated risk at stop<b>{money(plan.actual_risk)} ({plan.risk_percent}%)</b></span>
                 <span>Reward : risk<b>{plan.reward_to_risk ?? "—"} : 1</b></span>
               </div>
             ) : <p className="auth-message">Zuri could not size this trade.</p>}

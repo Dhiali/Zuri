@@ -46,11 +46,13 @@ export function ZuriMascot({ mood = "idle", size = 120, emote, expression, gestu
         <g key={side}>
           <g transform={`translate(${cx} 43)`}><g className={`zuri-brow zuri-brow-${side}`}><path d="M-7 0 H7" stroke="#e6d8ff" strokeWidth="3.4" strokeLinecap="round" /></g></g>
           <g transform={`translate(${cx} 63)`}>
+            <g className="zuri-gaze">
             <g className="zuri-eye">
               <g className="zuri-blink">
                 <rect className="zuri-eye-open" x="-5" y="-10" width="10" height="20" rx="5" fill="url(#zuri-eye)" />
                 <path className="zuri-eye-happy" d="M-7 4 Q0 -9 7 4" fill="none" stroke="#f1e8ff" strokeWidth="4" strokeLinecap="round" />
               </g>
+            </g>
             </g>
           </g>
         </g>
@@ -67,4 +69,3 @@ export function ZuriMascot({ mood = "idle", size = 120, emote, expression, gestu
     </div>
   );
 }
-

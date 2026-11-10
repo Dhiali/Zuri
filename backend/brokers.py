@@ -1,4 +1,5 @@
 ﻿import json
+import math
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -308,6 +309,38 @@ class AlpacaAdapter:
             {"id": o.get("id"), "symbol": o.get("symbol"), "quantity": _num(o.get("qty")), "side": o.get("side"), "type": o.get("type"), "status": o.get("status"), "submitted_at": o.get("submitted_at"), "order_class": o.get("order_class")}
             for o in data
         ]
+
+    def fill_activities(self, page_token: str | None = None, after: str | None = None):
+        params: dict[str, Any] = {"direction": "asc", "page_size": 100}
+        if page_token:
+            params["page_token"] = page_token
+        if after:
+            params["after"] = after
+        data = _request("GET", f"{self.base}/v2/account/activities/FILL", headers=self.headers, params=params)
+        if not isinstance(data, list):
+            raise HTTPException(status_code=502, detail="Alpaca returned invalid fill activities.")
+        fills = []
+        for activity in data:
+            if not isinstance(activity, dict):
+                raise HTTPException(status_code=502, detail="Alpaca returned an invalid fill activity.")
+            activity_id, order_id = activity.get("id"), activity.get("order_id")
+            symbol, side, at = activity.get("symbol"), activity.get("side"), activity.get("transaction_time")
+            quantity, price = _num(activity.get("qty")), _num(activity.get("price"))
+            if (activity.get("activity_type") != "FILL" or not isinstance(activity_id, str) or not activity_id
+                    or not isinstance(order_id, str) or not order_id or not isinstance(symbol, str)
+                    or not re.fullmatch(r"[A-Za-z0-9._/-]{1,20}", symbol) or side not in ("buy", "sell")
+                    or not isinstance(at, str) or not at or quantity is None or price is None
+                    or not math.isfinite(quantity) or not math.isfinite(price) or quantity <= 0 or price <= 0):
+                raise HTTPException(status_code=502, detail="Alpaca returned an invalid fill activity.")
+            try:
+                timestamp = datetime.fromisoformat(at.replace("Z", "+00:00"))
+            except ValueError as e:
+                raise HTTPException(status_code=502, detail="Alpaca returned an invalid fill timestamp.") from e
+            if timestamp.tzinfo is None:
+                raise HTTPException(status_code=502, detail="Alpaca returned a fill timestamp without a timezone.")
+            fills.append({"id": activity_id, "order_id": order_id, "symbol": normalize_symbol("alpaca", symbol),
+                          "side": side, "quantity": quantity, "price": price, "time": at})
+        return fills
 
     def history(self, limit: int = 200):
         data = _request("GET", f"{self.base}/v2/orders", headers=self.headers, params={"status": "closed", "limit": limit, "direction": "desc"})

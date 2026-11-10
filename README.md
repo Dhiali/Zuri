@@ -61,7 +61,19 @@ Zuri addresses a real-world **education** problem: retail traders lose money bec
 
 - **Practice first.** Onboarding steers users to a paper account. Live accounts are supported but gated behind an explicit `CONFIRM LIVE` phrase.
 - **The AI never trades for you.** Zuri can propose and explain, but every order needs your explicit confirmation.
-- **Your journal writes itself.** Every order placed through Zuri, and every position opened outside it, is captured with a chart snapshot.
+- **Automatic journal.** Zuri attempts to capture submitted orders and detected positions, but these older automatic records are not verified fills. Check broker history before relying on them; chart snapshots are best-effort.
+
+  For a dedicated paper-only staging environment, set `ZURI_PAPER_ONLY=true` on the backend. This limits broker access and new connections to Alpaca paper accounts, selects only an Alpaca paper account as the active connection, and uses confirmed fills instead of legacy automatic capture. Existing unsupported accounts remain visible for disconnection but cannot be used. Before submitting a new order, the backend requires the fill cursor to be available; if storage or the migration is unavailable, the order is not submitted. This switch defaults to false and must not be enabled on an existing live environment without a separate rollout plan.
+
+  The local Alpaca paper-fill ledger and protected reconciliation endpoint can create a separate journal record for each confirmed partial fill. An account's first cursor starts at the migration or account-link/change time, rather than its first polling run; earlier fills are not imported. Reconnecting the same account resumes its existing checkpoint. This cutoff can overlap legacy unverified records, which are preserved. The endpoint remains disabled without a server-only `ALPACA_FILL_RECONCILIATION_SECRET` of at least 32 bytes. An optional scheduler dispatch script exists, but no job is configured and older order-based capture has not yet been replaced in the default configuration; deployment of this fill feature has not been verified. Do not rely on it as a replacement for broker history until reconciliation is completed and deployed.
+
+  [`supabase/paper_fill_scheduler.sql`](./supabase/paper_fill_scheduler.sql) is an opt-in setup script, not a migration or an active schedule. It requires Supabase Vault, `pg_net`, Vault secrets named `zuri_fill_backend_url` (HTTPS origin only) and `zuri_fill_reconciliation_secret` (matching the backend secret), and a separately configured `pg_cron` job. Dispatch is limited to ten accounts per run; pending requests are not repeated for three minutes, after which missing responses are retried. The service-only dispatch table reports the most recent response or failure, and `cron.job_run_details` reports job failures. `pg_net` queues requests asynchronously and its queue can expose decrypted authorization headers to database roles: audit and restrict database access before use. Queues and responses are unlogged and responses expire, so monitoring and periodic retries remain necessary.
+
+  **Do not enable the job yet.** Submitted-order capture can still create misleading records, and the complete broker-to-database flow has not been tested end to end. Resolve and test those gaps before scheduling, migrating or releasing to production.
+
+  `ALPACA_CONFIRMED_FILL_JOURNAL=true` switches only Alpaca paper accounts from legacy order/position capture to confirmed-fill journal sync. It defaults to false. Do not enable it until the migration, scheduler, monitoring and complete broker-to-database validation are in place: confirmed-fill snapshots and trade-level journey analytics are not yet integrated. In this mode, the updated frontend does not attach an order screenshot to a guessed same-symbol legacy snapshot; no confirmed-fill screenshot is created yet. Deploy the compatible frontend before enabling the backend switch. The journal separately counts confirmed fill entries among the most recent 500 entries, including partial fills; older or deleted entries may be missing. Use **Sync journal** to check again while the journal is open; if a backlog is reported, repeat the sync. Other brokers and live accounts retain their existing behavior.
+
+  `backend.test_fill_integration` is an opt-in integration test for a disposable Docker container labelled `zuri.fill.integration=disposable`, with an isolated `zuri_fill_integration` database containing the initial, broker, journey-event and fill migrations. Set `ZURI_FILL_TEST_CONTAINER` to that container ID to run it. The test uses a simulated Alpaca response and a PostgreSQL-backed storage adapter, not Alpaca or PostgREST; it checks pending orders, partial fills and recovery after a committed response is lost. Never point it at a persistent database: it deletes its fixed test user.
 - **Honest numbers.** Results are labelled as estimates where they are estimates, and the AI is told to use only the figures it is given.
 - **Your data, your account.** Everything is stored per user in Supabase behind row-level security. Broker credentials are encrypted and never returned to the browser.
 
@@ -95,7 +107,7 @@ Zuri addresses a real-world **education** problem: retail traders lose money bec
 ### Review and learning
 - **Dashboard** with balance, an AI "best next move" card, a weekly activity breakdown and free courses chosen for the user's level.
 - **History**: closed trades, orders and open positions from the broker, with CSV export.
-- **Chart snapshots** of every entry and exit with entry, stop and target lines. Zuri annotates support, resistance and stop placement, and offers a **practice mode** that hides the annotations until revealed.
+- **Chart snapshots** can include entry, stop and target lines. Zuri annotates support, resistance and stop placement, and offers a **practice mode** that hides the annotations until revealed. Capture and annotation depend on market data and may not succeed.
 - **Journal**: auto-captured entries plus your own notes, an AI-written note for any trade, and **Analyse my journey** for a leak and strategy report.
 
 ### Account and security
@@ -332,7 +344,7 @@ cd Zuri
    - **URL Configuration**:
      - *Site URL*: `http://localhost:3000`
      - *Redirect URLs*: add `http://localhost:3000`, `http://127.0.0.1:3000`, `http://localhost:3000/email-verified` and `http://127.0.0.1:3000/email-verified`.
-   - **Email Templates**: paste [`frontend/email-templates/confirm-signup.html`](./frontend/email-templates/confirm-signup.html) into *Confirm signup* and [`reset-password.html`](./frontend/email-templates/reset-password.html) into *Reset password*. Keep both `{{ .ConfirmationURL }}` values.
+   - **Email Templates**: paste [`confirm-signup.html`](./frontend/email-templates/confirm-signup.html) into *Confirm signup*, [`magic-link.html`](./frontend/email-templates/magic-link.html) into *Magic link or OTP*, and [`reset-password.html`](./frontend/email-templates/reset-password.html) into *Reset password*. Keep the `{{ .ConfirmationURL }}` placeholders in the first two templates and the `{{ .Token }}` placeholder in the reset template. Deploy the frontend with code-entry support and verify it before changing the reset template; the existing link-based template remains compatible during that transition. The logo is hosted at the production frontend URL; update the image URL if that domain changes.
    - **Sessions** *(optional)*: disable the inactivity timeout, or set it above one day, so users stay signed in.
 5. **Confirm every migration landed** by running this in the SQL Editor. All rows should show `true`:
 
@@ -436,7 +448,7 @@ Fill in the three `NEXT_PUBLIC_*` values, then choose an environment:
 | Broker mode | Paper accounts | Paper by default, live only with `CONFIRM LIVE` |
 | Email sender | Supabase built-in (testing only) | Custom SMTP on a verified domain |
 
-> The project currently runs on localhost. Before a real deployment, set the production origins above, serve everything over HTTPS, add rate limiting at your proxy or gateway, and tighten the frontend Content-Security-Policy. See [Security](#9-security).
+> A Vercel production frontend deployment exists, but the complete deployed system has not been verified. Before a release, confirm the production origins above, HTTPS, rate limiting at the proxy or gateway, and the frontend Content-Security-Policy. See [Security](#9-security).
 
 ### 5.7 Start everything
 
@@ -757,9 +769,10 @@ The backend serves interactive docs at `http://127.0.0.1:8000/docs`. All endpoin
 
 Zuri is an **MVP**. These are known and deliberate:
 
-- **Runs on localhost.** It is not deployed. A production release needs HTTPS, real origins, rate limiting and a tuned Content-Security-Policy.
+- **Deployment readiness.** The Vercel frontend has production deployments, but the deployed frontend, backend, database and broker flow have not been verified together. A production release needs HTTPS, real origins, rate limiting and a tuned Content-Security-Policy.
 - **Broker coverage.** Alpaca (stocks and crypto) is the most thoroughly tested. OANDA and Tradier are implemented but were not verified end to end with real keys.
 - **Queued stock orders** placed while the market is closed were not observed filling at the open.
+- **Automatic journal entries and chart snapshots can be created when an order is submitted, before it fills.** A cancelled or unfilled order may therefore appear as a trade. Check the broker's order and fill status before relying on these records.
 - **P&L can differ slightly** between the Journal and History for the same trade. The Journal estimates from the price at close, while History pairs the real fills.
 - **Scanners run only while Zuri is open** in a browser tab. There is no background alerting.
 - **Quotes** come from public feeds and can be delayed by up to about 15 minutes. The chart uses TradingView's own feed.

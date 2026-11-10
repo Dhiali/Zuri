@@ -71,7 +71,7 @@ export function HistoryView({ linked, token, refreshKey }: { linked: LinkedAccou
       {connected && <div className="content-card history-card">
         <div className="history-toolbar">
           <div className="history-tabs" aria-label="History tabs" data-zuri-target="history-tabs">
-            {([["closed", "Closed trades"], ["orders", "Orders"], ["open", "Open positions"]] as [Tab, string][]).map(([key, label]) => (
+            {([["closed", "Closed trades"], ["orders", "Filled orders"], ["open", "Open positions"]] as [Tab, string][]).map(([key, label]) => (
               <button key={key} type="button" className={tab === key ? "history-tab active" : "history-tab"} onClick={() => setTab(key)}>{label}</button>
             ))}
           </div>
@@ -84,6 +84,7 @@ export function HistoryView({ linked, token, refreshKey }: { linked: LinkedAccou
           {tab === "orders" && <table><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Quantity</th><th>Price</th></tr></thead><tbody>
             {fills.map((f) => <tr key={f.id}><td>{when(f.time)}</td><td><b>{f.symbol}</b></td><td><span className={f.side === "buy" ? "side-pill long" : "side-pill short"}>{f.side === "buy" ? "Buy" : "Sell"}</span></td><td>{f.quantity}</td><td>{f.price ?? "—"}</td></tr>)}
           </tbody></table>}
+          {tab === "orders" && <p className="muted">This list shows broker fills, not pending or cancelled orders. Check Trade → Pending orders for waiting orders.</p>}
           {tab === "open" && <table><thead><tr><th>Symbol</th><th>Side</th><th>Quantity</th><th>Avg entry</th><th>Current</th><th>Unrealized P&amp;L</th></tr></thead><tbody>
             {positions.map((p) => <tr key={p.symbol}><td><b>{p.symbol}</b></td><td><span className={p.side === "short" ? "side-pill short" : "side-pill long"}>{p.side === "short" ? "Short" : "Long"}</span></td><td>{p.quantity ?? "—"}</td><td>{formatMoney(p.avg_entry_price, currency)}</td><td>{formatMoney(p.current_price, currency)}</td><td className={plClass(p.unrealized_pl)}>{plText(p.unrealized_pl)}</td></tr>)}
           </tbody></table>}

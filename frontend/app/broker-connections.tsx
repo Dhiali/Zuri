@@ -14,6 +14,7 @@ type BrokerInfo = {
   environments: Environment[];
   asset_class: string;
   linked: { environment: Environment; account_label: string | null } | null;
+  available?: boolean;
 };
 
 type BrokerAccount = {
@@ -161,7 +162,7 @@ export function BrokerConnections({ onChange }: { onChange?: () => void }) {
 
   return (
     <div className="settings-section">
-      <span className="small-label">LIVE BROKER ACCOUNTS</span>
+      <span className="small-label">BROKER ACCOUNTS</span>
       <h3>Linked brokers</h3>
       <div data-zuri-target="broker-list">
       <p className="auth-message">Credentials are encrypted on the Zuri server and never returned to the browser. Use API keys with trading permissions only; never enable withdrawals.</p>
@@ -171,6 +172,7 @@ export function BrokerConnections({ onChange }: { onChange?: () => void }) {
       {brokers.map((broker) => {
         const account = accounts[broker.id];
         const isBusy = busy === broker.id;
+        const available = broker.available !== false;
         return (
           <div className="setting-row broker-card" key={broker.id}>
             <div>
@@ -178,6 +180,7 @@ export function BrokerConnections({ onChange }: { onChange?: () => void }) {
               <small>
                 {broker.asset_class} • {broker.linked ? `${broker.linked.environment === "live" ? "LIVE" : "Paper"} account ${broker.linked.account_label ?? ""}` : "Not linked"}
               </small>
+              {!available && <small>This account is unavailable in this release. Disconnect it to use Alpaca paper trading.</small>}
               {account && (
                 <small>
                   Equity {formatMoney(account.account.equity, account.account.currency)} • Cash {formatMoney(account.account.cash, account.account.currency)} • {account.positions.length} open position(s)
@@ -188,8 +191,8 @@ export function BrokerConnections({ onChange }: { onChange?: () => void }) {
             <div className="account-edit-actions">
               {broker.linked ? (
                 <>
-                  <button type="button" className="account-edit-button" disabled={isBusy} onClick={() => void handleLoadAccount(broker)}>Refresh</button>
-                  <button type="button" className="account-edit-button" disabled={isBusy} onClick={() => setOrderBroker(orderBroker === broker.id ? null : broker.id)}>Trade</button>
+                  {available && <button type="button" className="account-edit-button" disabled={isBusy} onClick={() => void handleLoadAccount(broker)}>Refresh</button>}
+                  {available && <button type="button" className="account-edit-button" disabled={isBusy} onClick={() => setOrderBroker(orderBroker === broker.id ? null : broker.id)}>Trade</button>}
                   <button type="button" className="account-edit-button" disabled={isBusy} onClick={() => void handleUnlink(broker)}>Disconnect</button>
                 </>
               ) : (

@@ -17,8 +17,10 @@ import type { Session } from "@supabase/supabase-js";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "./supabase";
 import { saveUserProfile } from "./user-data";
 import { IntroVisual } from "./intro-visuals";
+import { needsPasswordSetup } from "./password-setup";
+import { verifyPasswordRecoveryCode } from "./password-recovery";
 
-type AuthStatus = "loading" | "intro" | "welcome" | "sign-in" | "sign-up" | "set-password" | "verify-email" | "onboarding" | "workspace" | "reset-password";
+type AuthStatus = "loading" | "intro" | "welcome" | "sign-in" | "sign-up" | "set-password" | "verify-email" | "onboarding" | "workspace" | "recovery-code" | "reset-password";
 type Experience = "New to trading" | "Learning the basics" | "Experienced";
 type Market = "Stocks" | "Crypto" | "Forex" | "Commodities";
 type SocialProvider = "google";
@@ -52,6 +54,7 @@ type AuthContextValue = {
   signOut: () => Promise<void>;
   updateEmail: (email: string) => Promise<void>;
   sendPasswordChangeEmail: () => Promise<string>;
+  openPasswordRecoveryCode: () => void;
   updateDisplayName: (displayName: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
 };
@@ -108,7 +111,7 @@ function statusForSession(session: Session | null): AuthStatus {
   const usedGoogle = Array.isArray(providers)
     ? providers.includes("google")
     : session.user.app_metadata.provider === "google";
-  if (usedGoogle && session.user.user_metadata.password_created !== true) return "set-password";
+  if (needsPasswordSetup(session.user)) return "set-password";
   // New Google accounts must confirm their email by link. The flag lives in app_metadata, which only the backend can write.
   if (usedGoogle && session.user.app_metadata.email_link_verified !== true && Date.parse(session.user.created_at) >= EMAIL_LINK_REQUIRED_FROM) return "verify-email";
   return session.user.user_metadata.onboarding_completed === true ? "workspace" : "onboarding";
@@ -142,6 +145,8 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
   const [activeProvider, setActiveProvider] = useState<SocialProvider | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [recoveryEmail, setRecoveryEmail] = useState("");
+  const [recoveryCode, setRecoveryCode] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
   const [confirmAccountPassword, setConfirmAccountPassword] = useState("");
   const [name, setName] = useState("");
@@ -167,7 +172,9 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
       authEventReceived = true;
       markKnownUser(nextSession);
       setSession(nextSession);
-      setStatus(event === "PASSWORD_RECOVERY" ? "reset-password" : statusForSession(nextSession));
+      setStatus((current) => event === "PASSWORD_RECOVERY" ? "reset-password" :
+        (nextSession && (event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") &&
+          (current === "recovery-code" || current === "reset-password") ? current : statusForSession(nextSession)));
       setError("");
     });
 
@@ -256,7 +263,21 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
       if (!supabase || !session || !address) throw new Error("Sign in before changing your password.");
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(address, { redirectTo: window.location.origin });
       if (resetError) throw resetError;
+      setRecoveryEmail(address);
+      setRecoveryCode("");
+      setError("");
+      setMessage("");
+      setStatus("recovery-code");
       return address;
+    },
+    openPasswordRecoveryCode: () => {
+      const address = session?.user.email;
+      if (!address) throw new Error("Sign in before changing your password.");
+      setRecoveryEmail(address);
+      setRecoveryCode("");
+      setError("");
+      setMessage("");
+      setStatus("recovery-code");
     },
     updateEmail: async (email: string) => {
       const supabase = getSupabaseBrowserClient();
@@ -408,9 +429,32 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
         redirectTo: window.location.origin,
       });
       if (resetError) throw resetError;
-      setMessage("Password reset link sent. Check your email to choose a new password.");
+      setRecoveryEmail(email.trim());
+      setRecoveryCode("");
+      setStatus("recovery-code");
     } catch (resetError) {
       setError(resetError instanceof Error ? resetError.message : "Unable to send a reset link.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const verifyRecoveryCode = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError("");
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) {
+      setError("Supabase is not configured. Please try again later.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const recoverySession = await verifyPasswordRecoveryCode(supabase.auth, recoveryEmail, recoveryCode);
+      setRecoveryCode("");
+      setSession(recoverySession);
+      setStatus("reset-password");
+    } catch (verificationError) {
+      setError(verificationError instanceof Error ? verificationError.message : "Unable to verify the code. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -484,17 +528,6 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
         headers: { Authorization: "Bearer " + session.access_token, "Content-Type": "application/json" },
         body: JSON.stringify({ password: accountPassword }),
       });
-      if (response.status === 503) {
-        // The backend has no admin key configured; a signed-in user can set their own password directly.
-        const { error: selfError } = await supabase.auth.updateUser({ password: accountPassword, data: { password_created: true } });
-        if (selfError) throw selfError;
-        const { data: refreshed } = await supabase.auth.getSession();
-        setSession(refreshed.session);
-        setStatus(statusForSession(refreshed.session));
-        setAccountPassword("");
-        setConfirmAccountPassword("");
-        return;
-      }
       if (response.status === 401) {
         await supabase.auth.signOut({ scope: "local" });
         setSession(null);
@@ -730,10 +763,31 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
                     <label>Email address<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required /></label>
                     <label>Password<PasswordInput autoComplete={visibleStatus === "sign-up" ? "new-password" : "current-password"} value={password} onChange={setPassword} placeholder={visibleStatus === "sign-up" ? "At least 8 characters" : "Your password"} minLength={visibleStatus === "sign-up" ? 8 : undefined} /></label>
                     {visibleStatus === "sign-in" && <button type="button" className="auth-forgot" disabled={busy} onClick={() => void sendPasswordReset()}>Forgot password?</button>}
+                    {visibleStatus === "sign-in" && <button type="button" className="auth-forgot" disabled={busy} onClick={() => {
+                      if (!email.trim()) { setError("Enter your email address first."); return; }
+                      setError("");
+                      setRecoveryEmail(email.trim());
+                      setRecoveryCode("");
+                      setStatus("recovery-code");
+                    }}>Already have a recovery code?</button>}
                     <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Please wait…" : visibleStatus === "sign-up" ? "Create account" : "Sign in"} <span>→</span></button>
                   </form>
                   <div className="auth-switch">{visibleStatus === "sign-up" ? "Already have an account?" : "New to Zuri?"} <button type="button" onClick={() => switchStatus(visibleStatus === "sign-up" ? "sign-in" : "sign-up")}>{visibleStatus === "sign-up" ? "Sign in" : "Create an account"}</button></div>
                   <div className="auth-fineprint">Your account is managed securely by Supabase. Zuri never stores your password.</div>
+                </>
+              )}
+
+              {visibleStatus === "recovery-code" && (
+                <>
+                  <span className="auth-card-kicker">ACCOUNT SECURITY</span>
+                  <h2>Check your email</h2>
+                  <p>If an account exists for <strong>{recoveryEmail}</strong>, use the reset link or enter the code from the latest email below.</p>
+                  {error && <div className="auth-error" role="alert">{error}</div>}
+                  <form className="auth-form" onSubmit={verifyRecoveryCode}>
+                    <label>Recovery code<input type="text" inputMode="numeric" autoComplete="one-time-code" value={recoveryCode} onChange={(event) => setRecoveryCode(event.target.value)} required /></label>
+                    <button type="submit" className="auth-submit" disabled={busy}>{busy ? "Verifying…" : "Verify code"} <span>→</span></button>
+                  </form>
+                  <div className="auth-switch"><button type="button" disabled={busy} onClick={() => { setRecoveryCode(""); setStatus(statusForSession(session)); }}>Cancel</button></div>
                 </>
               )}
 

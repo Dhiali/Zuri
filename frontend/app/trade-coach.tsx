@@ -22,7 +22,7 @@ const STEPS = [
   },
   {
     title: "Add a stop loss and take profit",
-    why: "The stop loss is the price where you accept you were wrong and exit. The take profit is where you cash in. Decide both before you enter.",
+    why: "A stop loss sets a trigger for an exit; it does not guarantee an execution price or limit your loss. A take profit sets a target. Decide both before you enter.",
     how: ["Find the Stop loss and Take profit boxes.", "Type your own prices, or press Ask Zuri to fill these and I'll suggest them from recent price swings.", "For a Buy, the stop sits below the current price and the target above. For a Sell it's the other way round."],
   },
   {
@@ -47,9 +47,9 @@ export function FirstTradeCoach({ step, onStep, onExit, placed, onFinish, note, 
       <section className="content-card trade-coach coach-done" data-zuri-target="trade-coach">
         <div className="trade-coach-zuri"><ZuriMascot mood="idle" size={72} emote="🎉" /></div>
         <div className="trade-coach-body">
-          <span className="small-label">FIRST TRADE · DONE</span>
-          <h2>You placed your first practice trade</h2>
-          <p>Well done. You made every decision yourself. Next, write a short journal note about why you took it, so you can learn from it later.</p>
+          <span className="small-label">FIRST ORDER · SENT</span>
+          <h2>Your order was submitted</h2>
+          <p>An accepted order may still be pending or only partly filled. Check your broker&apos;s order and fill history before recording it as a trade.</p>
           <div className="trade-coach-actions"><button className="solid-button" onClick={onFinish}>Finish</button></div>
         </div>
       </section>
@@ -74,7 +74,7 @@ export function FirstTradeCoach({ step, onStep, onExit, placed, onFinish, note, 
           {step > 0 && <button className="outline-button" onClick={() => onStep(step - 1)}>← Back</button>}
           {step === 3 && <button className="outline-button" onClick={onAskLevels} disabled={levelsBusy}>{levelsBusy ? "Zuri is checking…" : "Ask Zuri to fill these"}</button>}
           {!last && <button className="solid-button" onClick={() => onStep(step + 1)}>I&apos;ve done this, next →</button>}
-          {last && <small className="muted">I&apos;ll stay here until your order goes through.</small>}
+          {last && <small className="muted">I&apos;ll stay here until your order is submitted.</small>}
         </div>
       </div>
     </section>
