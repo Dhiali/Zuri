@@ -31,6 +31,9 @@
 12. [API reference](#12-api-reference)
 13. [Known limitations](#13-known-limitations)
 14. [Troubleshooting](#14-troubleshooting)
+15. [Demo video](#15-demo-video)
+16. [Team and contributions](#16-team-and-contributions)
+17. [Acknowledgements](#17-acknowledgements)
 
 ---
 
@@ -41,6 +44,10 @@
 Most trading platforms assume you already know what you are doing. New traders are handed a dense screen, a live-money button and no feedback, and most of them learn expensive lessons alone.
 
 **Zuri Markets** is a personal trading desk built around the opposite idea: the platform should coach you. An AI guide named **Zuri** meets each new user, finds out their experience and goals, walks them through the whole app, helps them link a free **paper-trading** (practice) broker account, coaches them through a first trade, and then keeps an honest record of what they did so it can point out their own habits, good and bad.
+
+### Domain: Education
+
+Zuri addresses a real-world **education** problem: retail traders lose money because nobody teaches them before they risk it. Zuri is a financial-literacy tool. It teaches through practice (paper trading), explains every step in plain language, and uses an AI coach to turn the user's own trades into lessons.
 
 ### Who it is for
 
@@ -738,6 +745,14 @@ The backend serves interactive docs at `http://127.0.0.1:8000/docs`. All endpoin
 
 ---
 
+## Deployment
+
+- **Backend (Render):** [render.yaml](render.yaml) defines the FastAPI service. Create a Blueprint from this repo, then fill in the secret variables. The backend needs a persistent host because it uses background threads for chart snapshots.
+- **Frontend (Vercel):** import the repo, set the root directory to `frontend`, and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `NEXT_PUBLIC_BACKEND_URL` (the Render URL).
+- **Then:** add the Vercel URL to the backend's `FRONTEND_ORIGINS`, and add `<vercel-url>/email-verified` to the Supabase *Redirect URLs* and *Site URL*.
+
+---
+
 ## 13. Known limitations
 
 Zuri is an **MVP**. These are known and deliberate:
@@ -766,6 +781,31 @@ Zuri is an **MVP**. These are known and deliberate:
 | Stored broker accounts stopped working | `BROKER_ENCRYPTION_KEY` was changed or lost. Restore it, or have users re-link. |
 | AI replies say Zuri is out of thinking allowance | The Groq rate limit was hit. Wait a moment, or configure a fallback AI provider. |
 | Backend changes do not appear | Backend runs without auto-reload by default. Restart it, or start it with `--reload`. |
+
+---
+
+## 15. Demo video
+
+> Demo video: **coming soon** (5-8 minutes: sign-in, dashboard navigation, and create/read/update/delete of journal entries and scanners).
+
+---
+
+## 16. Team and contributions
+
+| Member | Contribution |
+|---|---|
+| **Dhiali** | Solo project: concept, UX and branding, Next.js frontend, FastAPI backend, Supabase schema and security, AI agent design, testing and documentation. |
+
+---
+
+## 17. Acknowledgements
+
+- [Groq](https://groq.com) and Google Gemini for the AI services.
+- [Supabase](https://supabase.com) for authentication and the database.
+- [Alpaca](https://alpaca.markets), [OANDA](https://www.oanda.com) and [Tradier](https://tradier.com) for broker APIs.
+- [TradingView](https://www.tradingview.com) for the charting widget and Lightweight Charts.
+- CNBC and BBC for public news feeds.
+- The Interactive Development 300 lecturers and peers for feedback.
 
 ---
 
