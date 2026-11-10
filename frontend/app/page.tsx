@@ -633,7 +633,7 @@ function TradingWorkspace() {
   return (
     <main className="terminal-shell">
       <header className="topbar">
-        <a className="brand" href="#charts" onClick={() => setSection("Charts")} aria-label="Zuri home"><Image className="brand-logo" src="/zuri-logo.jpg" alt="" width={768} height={768} priority /><span>zuri<span className="brand-dot">.</span></span></a>
+        <a className="brand" href="#charts" onClick={() => setSection("Charts")} aria-label="Zuri home"><Image className="brand-logo" src="/zuri-logo.png" alt="" width={768} height={768} priority /><span>zuri<span className="brand-dot">.</span></span></a>
         <div className="top-divider" />
         <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">{linkedAccount.data ? `${linkedAccount.data.broker_name.toUpperCase()} · ${linkedAccount.data.environment === "live" ? "LIVE" : "PAPER"}` : "NO BROKER LINKED"}</span><MarketClock token={accessToken} enabled={Boolean(linkedAccount.data)} /></div>
         <div className="topbar-right"><span className="zuri-anchor"><button className={`icon-action zuri-top${showOnboarding ? " is-away" : ""}${bubble && !showOnboarding ? " is-speaking" : ""}`} title="Ask Zuri" aria-label="Ask Zuri" onClick={() => setAssistantOpen(true)}><ZuriMascot size={34} /></button>{bubble && !showOnboarding && (

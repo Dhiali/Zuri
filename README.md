@@ -1,8 +1,6 @@
 <div align="center">
 
-<img src="frontend/public/zuri-logo.jpg" alt="Zuri Markets logo" width="120" />
-
-# Zuri Markets
+<img src="docs/zuri-header.png" alt="Zuri Markets: an AI-assisted, web-based trading platform with charts, a trade ticket, an automatic journal and an AI coach" width="100%" />
 
 **An AI-guided trading desk that teaches new traders by doing: paper-trade first, journal everything, learn from your own habits.**
 

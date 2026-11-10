@@ -623,7 +623,7 @@ export function ZuriAuthGate({ children }: { children: ReactNode }) {
       ) : (
         <main className="auth-shell">
           <header className="auth-topbar">
-            <Link className="auth-brand" href="/" aria-label="Zuri home"><Image src="/zuri-logo.jpg" alt="" width={768} height={768} priority /><span>zuri<span className="auth-brand-dot">.</span></span></Link>
+            <Link className="auth-brand" href="/" aria-label="Zuri home"><Image src="/zuri-logo.png" alt="" width={768} height={768} priority /><span>zuri<span className="auth-brand-dot">.</span></span></Link>
             {visibleStatus === "intro" ? (
               <div className="auth-top-actions"><span>Already have an account?</span><button type="button" className="auth-text-button" onClick={() => continueFromIntro("sign-in")}>Sign in</button></div>
             ) : visibleStatus === "welcome" ? (
