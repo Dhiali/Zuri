@@ -24,7 +24,7 @@ export function PendingOrders({ token, enabled, refreshKey }: { token: string; e
   const [cancelling, setCancelling] = useState("");
 
   async function cancel(order: PendingOrder) {
-    if (!window.confirm(`Cancel your ${order.side === "sell" ? "sell" : "buy"} order for ${order.quantity ?? ""} ${order.symbol}? Nothing has been traded yet.`)) return;
+    if (!window.confirm(`Cancel the remaining quantity of your ${order.side === "sell" ? "sell" : "buy"} order for ${order.quantity ?? ""} ${order.symbol}? Some or all of it may already have filled.`)) return;
     setCancelling(order.id);
     setError("");
     try {
@@ -70,10 +70,10 @@ export function PendingOrders({ token, enabled, refreshKey }: { token: string; e
     <section className="content-card pending-card" data-zuri-target="pending-orders">
       <div className="section-title"><div><span className="small-label">WAITING TO FILL</span><h2>Pending orders</h2></div><span className="muted">{orders ? `${orders.length} pending` : "Loading…"}</span></div>
       {error && <p className="auth-error" role="alert">{error}</p>}
-      {orders && orders.length === 0 && !error && <p className="muted">No pending orders. Orders you send while the market is closed wait here until it opens, then move to Open positions.</p>}
+      {orders && orders.length === 0 && !error && <p className="muted">{refreshKey > 0 ? "No pending orders were returned. A recently submitted order may take time to appear or may already have filled; check your broker for its status." : "No pending orders. Orders may wait here until they fill, expire, or are cancelled."}</p>}
       {orders && orders.length > 0 && (
         <>
-          {marketClosed && <p className="auth-message" role="note">The market is closed, so these will fill when it opens. They aren&apos;t positions yet.</p>}
+          {marketClosed && <p className="auth-message" role="note">The stock market is closed. Eligible orders may wait until it opens; fills and prices are not guaranteed. Some orders may already be partly filled.</p>}
           <div className="table-scroll"><table><thead><tr><th>SYMBOL</th><th>SIDE</th><th>QTY</th><th>TYPE</th><th>STATUS</th><th>SENT</th><th></th></tr></thead><tbody>
             {orders.map((order) => (
               <tr key={order.id}>

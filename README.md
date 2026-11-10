@@ -61,7 +61,7 @@ Zuri addresses a real-world **education** problem: retail traders lose money bec
 
 - **Practice first.** Onboarding steers users to a paper account. Live accounts are supported but gated behind an explicit `CONFIRM LIVE` phrase.
 - **The AI never trades for you.** Zuri can propose and explain, but every order needs your explicit confirmation.
-- **Your journal writes itself.** Every order placed through Zuri, and every position opened outside it, is captured with a chart snapshot.
+- **Journal with fill verification.** When `ALPACA_CONFIRMED_FILL_JOURNAL=true` is enabled after the fill-tracking migration, Alpaca paper fills are recorded individually when the journal syncs. Partial fills count separately; buy and sell do not imply a position was opened or closed. The initial cutoff is the connection's tracking-start time, so earlier fills are not imported. Use **Sync journal** again if a backlog is reported. Confirmed-fill snapshots and trade-level outcome analytics are not yet available. Legacy automatic records and snapshots are unverified and can represent cancelled or unfilled orders; check broker history. Other brokers and live accounts retain legacy capture.
 - **Honest numbers.** Results are labelled as estimates where they are estimates, and the AI is told to use only the figures it is given.
 - **Your data, your account.** Everything is stored per user in Supabase behind row-level security. Broker credentials are encrypted and never returned to the browser.
 

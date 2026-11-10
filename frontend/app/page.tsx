@@ -191,7 +191,10 @@ function TradingWorkspace() {
     void loadJournalEntries(userId).then((entries) => {
       setJournalEntries(entries);
       setJournalRefresh((value) => value + 1);
-    }).catch(() => undefined);
+      setDataError((current) => current.startsWith("Unable to reload your journal:") ? "" : current);
+    }).catch((error: unknown) => {
+      setDataError(`Unable to reload your journal: ${error instanceof Error ? error.message : "Please try again."}`);
+    });
   }, [userId]);
 
   // A missing table or load failure must never block the workspace.
@@ -591,11 +594,11 @@ function TradingWorkspace() {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({ symbol: orderSymbol, side, quantity, confirmed: true, confirmation_phrase: phrase, ...(stop !== undefined && target !== undefined ? { stop_loss: stop, take_profit: target } : {}) }),
     });
-    const body = await response.json().catch(() => ({})) as { detail?: unknown; status?: string; market_open?: boolean; next_open?: string | null; warnings?: string[] };
+    const body = await response.json().catch(() => ({})) as { detail?: unknown; status?: string; market_open?: boolean; next_open?: string | null; warnings?: string[]; legacy_snapshot_expected?: boolean };
     if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The order was rejected.");
     linkedAccount.refresh();
-    captureScreenForTrade(accessToken, orderSymbol, reloadJournal);
-    const waiting = body.market_open === false && body.status !== "filled" ? ` The market is closed, so it will wait${body.next_open ? ` and fill after it opens (${formatOpenTime(body.next_open)} your time)` : " until it opens"}.` : "";
+    captureScreenForTrade(accessToken, orderSymbol, reloadJournal, body.legacy_snapshot_expected !== false);
+    const waiting = body.market_open === false && body.status !== "filled" ? ` The market is closed, so it may wait until it opens${body.next_open ? ` (${formatOpenTime(body.next_open)} your time)` : ""}. A fill and its price are not guaranteed. Check Trade → Pending orders or your broker for its status.` : "";
     return `${linkedAccount.data.environment === "live" ? "LIVE" : "Paper"} order sent: ${body.status ?? "submitted"}.${waiting}${Array.isArray(body.warnings) ? ` ${body.warnings.join(" ")}` : ""}`;
   };
 
@@ -635,7 +638,7 @@ function TradingWorkspace() {
       <header className="topbar">
         <a className="brand" href="#charts" onClick={() => setSection("Charts")} aria-label="Zuri home"><Image className="brand-logo" src="/zuri-logo.png" alt="" width={768} height={768} priority /><span>zuri<span className="brand-dot">.</span></span></a>
         <div className="top-divider" />
-        <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <span className="market-open">{linkedAccount.data ? `${linkedAccount.data.broker_name.toUpperCase()} · ${linkedAccount.data.environment === "live" ? "LIVE" : "PAPER"}` : "NO BROKER LINKED"}</span><MarketClock token={accessToken} enabled={Boolean(linkedAccount.data)} /></div>
+        <div className="market-strip"><span className="live-dot" /> NYSE <span className="strip-separator">/</span> NASDAQ <button type="button" className="market-open" title="Open broker settings" onClick={() => { setSettingsRequest((current) => ({ tab: "Broker", n: (current?.n ?? 0) + 1 })); setSection("Settings"); }}>{linkedAccount.data ? `${linkedAccount.data.broker_name.toUpperCase()} · ${linkedAccount.data.environment === "live" ? "LIVE" : "PAPER"}` : "NO BROKER LINKED"}</button><MarketClock token={accessToken} enabled={Boolean(linkedAccount.data)} /></div>
         <div className="topbar-right"><span className="zuri-anchor"><button className={`icon-action zuri-top${showOnboarding ? " is-away" : ""}${bubble && !showOnboarding ? " is-speaking" : ""}`} title="Ask Zuri" aria-label="Ask Zuri" onClick={() => setAssistantOpen(true)}><ZuriMascot size={34} /></button>{bubble && !showOnboarding && (
           <div className="zuri-bubble" role="status" aria-label="Message from Zuri">
             <p>{bubble}</p>
@@ -1180,15 +1183,16 @@ function JournalView({ entries, token, refreshKey, onReload, onNewEntry, onDelet
   };
   return (
     <div className="secondary-view journal-view">
-      <div className="section-title journal-view-heading"><div className="journal-toolbar-meta"><span className="small-label">AUTOMATIC JOURNEY TRACKING · SAVED TO YOUR ACCOUNT</span><span className="journal-count"><b>{entries.length}</b> {entries.length === 1 ? "entry" : "entries"}<i>·</i><b>{entries.filter((entry) => entry.source === "auto").length}</b> auto-captured</span></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
+      <div className="section-title journal-view-heading"><div className="journal-toolbar-meta"><span className="small-label">AUTOMATIC JOURNEY TRACKING · SAVED TO YOUR ACCOUNT</span><span className="journal-count"><b>{entries.length}</b> {entries.length === 1 ? "entry" : "entries"}<i>·</i><b>{entries.filter((entry) => entry.source !== "manual").length}</b> auto-captured</span></div><button className="solid-button" onClick={onNewEntry}>＋ <span>New entry</span></button></div>
       <JournalInsights token={token} refreshKey={refreshKey} onEntriesChanged={onReload} />
       {draftError && <p className="auth-message" role="alert">{draftError}</p>}
       {entries.length === 0 ? <div className="content-card journal-empty"><span className="small-label">NO ENTRIES YET</span><h3>Start with a chart idea</h3><p>Capture a setup, define your risk, and write down what would invalidate the trade.</p><button className="outline-button" onClick={onNewEntry}>Open chart and write a note</button></div> : <div className="journal-entry-list">{entries.map((entry) => <article className="content-card journal-entry" key={entry.id}>
         <div className="journal-entry-heading"><div><span className="small-label">{entry.setup} · {entry.timeframe}</span><h3>{entry.symbol} <span className={`side-pill ${entry.side === "Short" ? "short" : entry.side === "Long" ? "long" : "watching"}`}>{entry.side}</span></h3></div><div className="journal-entry-actions"><time dateTime={entry.createdAt}>{formatDateTime(entry.createdAt)}</time><button className="text-action" onClick={() => onDelete(entry.id)} aria-label={`Delete ${entry.symbol} journal entry`}>Delete</button></div></div>
         <p>{entry.note}</p>
-        {entry.source === "auto" && <div className="journal-auto-row"><span className="auto-pill">AUTO-CAPTURED</span><button className="outline-button" disabled={draftingId === entry.id} onClick={() => void draftNote(entry.id)}>{draftingId === entry.id ? "Zuri is writing…" : "Ask Zuri to write the note"}</button></div>}
+        {entry.source === "auto" && <><p className="muted">Automatic record: the broker fill has not been verified. An order may have been cancelled or remained unfilled.</p><div className="journal-auto-row"><span className="auto-pill">AUTO-CAPTURED</span><button className="outline-button" disabled={draftingId === entry.id} onClick={() => void draftNote(entry.id)}>{draftingId === entry.id ? "Zuri is writing…" : "Ask Zuri to write the note"}</button></div></>}
+        {entry.source === "confirmed_fill" && <p className="muted">Confirmed Alpaca paper fill. Buy or sell does not indicate whether a position was opened or closed.</p>}
         {entry.source === "auto" && <SnapshotGallery token={token} refreshKey={refreshKey} entryId={entry.id} showControls={false} />}
-        <div className="journal-plan-values"><span>Entry <b>{entry.entry || "—"}</b></span><span>Stop <b>{entry.stop || "—"}</b></span><span>Target <b>{entry.target || "—"}</b></span></div>
+        <div className="journal-plan-values"><span>{entry.source === "confirmed_fill" ? "Fill price" : "Entry"} <b>{entry.entry || "—"}</b></span><span>Stop <b>{entry.stop || "—"}</b></span><span>Target <b>{entry.target || "—"}</b></span></div>
       </article>)}</div>}
     </div>
   );
@@ -1319,13 +1323,12 @@ function Dashboard({
       </div>
       {hero}
       {checklist}
-      {linked.status !== "ready" ? (
+      {(linked.status === "loading" || linked.status === "error") ? (
         <section className="content-card">
-          <div className="section-title"><div><span className="small-label">BROKER ACCOUNT</span><h2>{linked.status === "loading" ? "Loading your account…" : linked.status === "none" ? "No broker linked yet" : "Account unavailable"}</h2></div></div>
-          <p className="muted">{linked.status === "none" ? "Link a live or paper broker account to see your real balances and positions here." : linked.error}</p>
-          <button className="outline-button" onClick={() => setSection("Settings")}>Open Settings → Broker →</button>
+          <div className="section-title"><div><span className="small-label">BROKER ACCOUNT</span><h2>{linked.status === "loading" ? "Loading your account…" : "Account unavailable"}</h2></div></div>
+          {linked.status === "error" && <p className="muted" role="alert">{linked.error}</p>}
         </section>
-      ) : linked.data && (() => {
+      ) : linked.status === "ready" && linked.data && (() => {
         const { account, positions, broker_name: brokerName, environment } = linked.data;
         const floating = positions.reduce((sum, position) => sum + (position.unrealized_pl ?? 0), 0);
         return (
@@ -1398,7 +1401,7 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The position could not be closed.");
       const sameAsTicket = position.symbol.replace(/[^A-Za-z0-9]/g, "").toUpperCase() === orderSymbol.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-      setCloseMessage(sameAsTicket && marketClosed && marketQueues ? `Closing order sent for ${position.symbol}. The market is closed, so your broker will hold it until the next open and it can wait under Pending orders.` : `Closing order sent for ${position.symbol}. If it doesn't fill straight away, check Pending orders.`);
+      setCloseMessage(sameAsTicket && marketClosed && marketQueues ? `Closing order sent for ${position.symbol}. The market is closed, so it may wait until the next open. Check Pending orders or your broker for its status.` : `Closing order sent for ${position.symbol}. If it doesn't fill straight away, check Pending orders.`);
       setOrdersRefresh((value) => value + 1);
       linked.refresh();
       onTraded();
@@ -1452,7 +1455,7 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       setStopLoss(String(body.stop_loss));
       setTakeProfit(String(body.take_profit));
       setConfirmed(false);
-      const risk = typeof body.risk_amount === "number" ? ` With your quantity, the most you'd lose at the stop is about ${formatMoney(body.risk_amount, body.currency ?? accountCurrency)}.` : "";
+      const risk = typeof body.risk_amount === "number" ? ` With your quantity, the estimated loss at the stop price is ${formatMoney(body.risk_amount, body.currency ?? accountCurrency)}; actual losses can be greater.` : "";
       setLevelsNote(`I filled in a stop at ${body.stop_loss} and a target at ${body.take_profit}, based on recent price swings.${risk} Change them if you like. They're your call.`);
     } catch (error) {
       setLevelsNote(error instanceof Error ? error.message : "Zuri could not suggest levels.");
@@ -1492,7 +1495,7 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : "The order was rejected.");
       const filled = body.status === "filled";
-      const closedNote = body.market_open === false && !filled ? ` The ${marketName.toLowerCase()} is closed right now, so your broker is holding this order and will fill it when the market opens${body.next_open ? ` (${formatOpenTime(body.next_open)} your time)` : ""}. It won't show as a position until then. Check History > Orders to see it waiting.` : "";
+      const closedNote = body.market_open === false && !filled ? ` The ${marketName.toLowerCase()} is closed right now. The order may wait until the market opens${body.next_open ? ` (${formatOpenTime(body.next_open)} your time)` : ""}; its fill and price are not guaranteed. Check Pending orders below or your broker for its status.` : "";
       const notes = Array.isArray(body.warnings) ? ` ${body.warnings.join(" ")}` : "";
       setOrderMessage(`${isLive ? "LIVE" : "Paper"} order ${filled ? "filled" : "accepted"}: ${body.status ?? "submitted"}.${closedNote}${notes}`);
       if (showCoach) setCoachPlaced(true);
@@ -1502,7 +1505,7 @@ function TradeView({ symbol, instruments, orderSide, setOrderSide, linked, token
       setStopLoss("");
       setTakeProfit("");
       linked.refresh();
-      captureScreenForTrade(token, orderSymbol.trim(), onTraded);
+      captureScreenForTrade(token, orderSymbol.trim(), onTraded, body.legacy_snapshot_expected !== false);
     } catch (error) {
       setOrderError(error instanceof Error ? error.message : "The order failed.");
     } finally {
@@ -1602,10 +1605,9 @@ function SettingsView({
   preferences: UserPreferences | null;
   onSavePreferences: (preferences: UserPreferences) => Promise<void>;
 }) {
-  const { sendPasswordChangeEmail, deleteAccount, updateDisplayName, updateEmail } = useZuriAuth();
+  const { sendPasswordChangeEmail, openPasswordRecoveryCode, deleteAccount, updateDisplayName, updateEmail } = useZuriAuth();
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordError, setPasswordError] = useState("");
-  const [passwordMessage, setPasswordMessage] = useState("");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("Account");
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileName, setProfileName] = useState("");
@@ -1853,22 +1855,23 @@ function SettingsView({
           <span className="small-label">SECURITY</span>
           <h3>Access and protection</h3>
           <div className="password-change">
-            <div><b>Change password</b><small>For your security, we email a link to <b>{email}</b>. Open it to choose a new password.</small></div>
+            <div><b>Change password</b><small>For your security, we email recovery instructions to <b>{email}</b>.</small></div>
             {passwordError && <div className="auth-error" role="alert">{passwordError}</div>}
-            {passwordMessage && <div className="auth-message" role="status">{passwordMessage}</div>}
             <button className="solid-button" type="button" disabled={passwordBusy} onClick={async () => {
               setPasswordError("");
-              setPasswordMessage("");
               setPasswordBusy(true);
               try {
-                const sentTo = await sendPasswordChangeEmail();
-                setPasswordMessage(`We sent a password change link to ${sentTo}. Open it from your email to choose a new password.`);
+                await sendPasswordChangeEmail();
               } catch (sendError) {
                 setPasswordError(sendError instanceof Error ? sendError.message : "Unable to send the email. Please try again in a minute.");
               } finally {
                 setPasswordBusy(false);
               }
-            }}>{passwordBusy ? "Sending…" : "Email me a change link"}</button>
+            }}>{passwordBusy ? "Sending…" : "Email me recovery instructions"}</button>
+            <button className="text-action" type="button" disabled={passwordBusy} onClick={() => {
+              setPasswordError("");
+              try { openPasswordRecoveryCode(); } catch (recoveryError) { setPasswordError(recoveryError instanceof Error ? recoveryError.message : "Unable to open password recovery."); }
+            }}>I already have a recovery code</button>
           </div>
           <div className="setting-row"><div><b>Two-factor auth</b><small>Configure available sign-in methods in Supabase</small></div><input type="checkbox" disabled aria-label="Two-factor authentication is not available in this prototype" /></div>
           <div className="setting-row"><div><b>Session timeout</b><small>Session timeout controls are not available yet</small></div><select value="30 min" disabled aria-label="Session timeout is not available in this prototype"><option>10 min</option><option>30 min</option><option>1 hour</option><option>4 hours</option></select></div>

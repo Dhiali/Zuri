@@ -6,13 +6,13 @@ export type JournalEntry = {
   id: string;
   symbol: string;
   timeframe: string;
-  side: JournalSide;
+  side: JournalSide | "Buy" | "Sell";
   setup: string;
   entry: string;
   stop: string;
   target: string;
   note: string;
-  source: "manual" | "auto";
+  source: "manual" | "auto" | "confirmed_fill";
   createdAt: string;
 };
 
@@ -99,13 +99,13 @@ function toJournalEntry(row: Record<string, unknown>): JournalEntry {
     id: String(row.id),
     symbol: String(row.symbol),
     timeframe: String(row.timeframe),
-    side: row.side as JournalSide,
+    side: row.side as JournalEntry["side"],
     setup: String(row.setup ?? ""),
     entry: row.entry_price == null ? "" : String(row.entry_price),
     stop: row.stop_price == null ? "" : String(row.stop_price),
     target: row.target_price == null ? "" : String(row.target_price),
     note: String(row.note ?? ""),
-    source: row.source === "auto" ? "auto" : "manual",
+    source: row.source === "confirmed_fill" ? "confirmed_fill" : row.source === "auto" ? "auto" : "manual",
     createdAt: String(row.created_at),
   };
 }

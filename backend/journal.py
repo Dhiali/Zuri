@@ -59,6 +59,7 @@ def compute_stats(
     entry_trades = [e for e in trade_events if _is_entry(e)]
     exits = [e for e in trade_events if not _is_entry(e)]
     manual_entries = [e for e in entries if e.get("source", "manual") == "manual"]
+    confirmed_fill_entries = sum(1 for entry in entries if entry.get("source") == "confirmed_fill")
 
     first_interest: dict[str, datetime] = {}
     for event in events:
@@ -130,6 +131,12 @@ def compute_stats(
     closed_outside = [e for e in exits if e["kind"] == "position_closed"]
 
     return {
+        "confirmed_fill_journal_entries": confirmed_fill_entries,
+        "trade_metrics_basis": (
+            "Entry, exit and outcome metrics use legacy unverified journey events, not confirmed fills. "
+            "Confirmed fill counts cover only the journal entries supplied, may exclude deleted or older entries, "
+            "and include partial fills; a fill is not necessarily a complete trade."
+        ),
         "first_event_at": events[0]["created_at"] if events else None,
         "blocked_orders": len(blocked),
         "blocked_orders_by_reason": dict(blocked_by_reason),

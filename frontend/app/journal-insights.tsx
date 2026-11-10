@@ -3,8 +3,10 @@ import { formatDateTime } from "./time-zone";
 
 import { useEffect, useRef, useState } from "react";
 import { backendUrl } from "./linked-account";
+import { parseJournalSyncResult, type JournalSyncResult } from "./journal-sync";
 
 type Stats = {
+  confirmed_fill_journal_entries?: number;
   symbols_of_interest: number;
   symbols_traded: number;
   interest_to_trade_rate_pct: number | null;
@@ -83,7 +85,11 @@ export function JournalInsights({ token, refreshKey, onEntriesChanged }: { token
   const [report, setReport] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const synced = useRef(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncRetry, setSyncRetry] = useState(0);
+  const syncedToken = useRef<string | null>(null);
+  const pendingSync = useRef<{ token: string; request: Promise<JournalSyncResult> } | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -97,21 +103,40 @@ export function JournalInsights({ token, refreshKey, onEntriesChanged }: { token
         setTimeline(body.timeline);
         setError("");
       });
-    const run = synced.current
+    const shouldSync = syncedToken.current !== token;
+    if (shouldSync) setSyncing(true);
+    if (shouldSync && pendingSync.current?.token !== token) {
+      const request = fetch(`${backendUrl}/api/journal/sync`, { method: "POST", headers })
+        .then(async (response): Promise<JournalSyncResult> => {
+          if (!response.ok) throw new Error("Journal sync failed. Your latest broker fills may be missing.");
+          return parseJournalSyncResult(await response.json());
+        });
+      pendingSync.current = { token, request };
+    }
+    const request = pendingSync.current?.token === token ? pendingSync.current.request : null;
+    const run = !shouldSync || !request
       ? load()
-      : fetch(`${backendUrl}/api/journal/sync`, { method: "POST", headers })
-        .then((response) => (response.ok ? response.json() : { created: 0, closed: 0 }))
-        .then((body: { created: number; closed?: number }) => {
-          synced.current = true;
-          if ((body.created > 0 || (body.closed ?? 0) > 0) && !cancelled) onEntriesChanged();
+      : request.then((body) => {
+          if (cancelled) return;
+          syncedToken.current = token;
+          setSyncMessage(body.more ? "More fills are waiting to be synced." : "Journal sync completed.");
+          if (body.created > 0 || (body.closed ?? 0) > 0) onEntriesChanged();
         })
-        .catch(() => { synced.current = true; })
+        .catch(() => {
+          if (cancelled) return;
+          syncedToken.current = token;
+          setSyncMessage("Journal sync failed. Your latest broker fills may be missing.");
+        })
+        .finally(() => {
+          if (pendingSync.current?.request === request) pendingSync.current = null;
+          if (!cancelled) setSyncing(false);
+        })
         .then(load);
     run.catch((loadError: unknown) => {
       if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Insights are unavailable.");
     });
     return () => { cancelled = true; };
-  }, [token, refreshKey, onEntriesChanged]);
+  }, [token, refreshKey, onEntriesChanged, syncRetry]);
 
   async function analyse() {
     setBusy(true);
@@ -134,6 +159,7 @@ export function JournalInsights({ token, refreshKey, onEntriesChanged }: { token
   }
 
   const tiles: [string, string][] = stats ? [
+    ["Confirmed fill entries (recent journal)", stats.confirmed_fill_journal_entries == null ? "—" : String(stats.confirmed_fill_journal_entries)],
     ["Interest → trade", `${stats.symbols_traded} of ${stats.symbols_of_interest} pairs`],
     ["Time from interest to first trade", stats.median_hours_interest_to_first_trade === null ? "—" : `${stats.median_hours_interest_to_first_trade} h (median)`],
     ["Trades", `${stats.entry_trades} in · ${stats.exits} out`],
@@ -152,9 +178,13 @@ export function JournalInsights({ token, refreshKey, onEntriesChanged }: { token
     <section className="content-card journal-insights" data-zuri-target="journal-insights">
       <div className="section-title">
         <div><span className="small-label">ZURI · LEAK FINDER &amp; STRATEGY ANALYSER</span><h2>Your trading journey, tracked automatically</h2></div>
-        <button className="solid-button" onClick={() => void analyse()} disabled={busy}>{busy ? "Analysing…" : "Analyse my journey"}</button>
+        <div>
+          <button type="button" className="outline-button" disabled={syncing} onClick={() => { syncedToken.current = null; setSyncRetry((value) => value + 1); }}>{syncing ? "Syncing…" : "Sync journal"}</button>
+          <button className="solid-button" onClick={() => void analyse()} disabled={busy}>{busy ? "Analysing…" : "Analyse my journey"}</button>
+        </div>
       </div>
-      <p className="muted">Zuri keeps this journal for you: every pair you watch, every chart you open, every trade (including ones opened or closed outside Zuri), every order your own limits stopped, and every plan you talk through with her. She then looks for leaks in the pattern. Nothing to fill in, and your own notes add context.</p>
+      <p className="muted">Confirmed fill entries count the latest 500 journal entries and include partial fills; deleted entries and older fills may be missing. Entry, exit and outcome metrics below use older unverified records, which can include unfilled orders. Check your broker history before relying on them.</p>
+      {syncMessage && <p className="auth-message" role="status">{syncMessage}</p>}
       {error && <p className="auth-message" role="alert">{error}</p>}
       {stats && <div className="journal-stat-grid">{tiles.map(([label, value]) => <div key={label} className="journal-stat"><span>{label}</span><strong>{value}</strong></div>)}</div>}
       {report && <Report text={report} />}

@@ -1,4 +1,5 @@
 import base64
+import hmac
 import json
 import os
 import logging
@@ -32,6 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import brokers
 from . import coaching
+from . import fill_tracking
 from . import journal as journal_analytics
 from . import sizing
 from . import zuri_agent
@@ -1773,7 +1775,11 @@ def place_broker_order(broker: str, request: BrokerOrderRequest, user: dict = De
             pass
     logger.info("User %s placed %s %s order on %s (%s).", user["id"], request.side, request.symbol, broker, row["environment"])
     _capture_trade(user["id"], "order_placed", symbol, request.side, request.quantity, broker, row["environment"], context, adapter=adapter)
-    return {"environment": row["environment"], **result}
+    return {
+        "environment": row["environment"],
+        **result,
+        "legacy_snapshot_expected": not _use_confirmed_paper_fills(broker, row["environment"]),
+    }
 
 
 TRADE_EMOTES = {"👋", "🤔", "💡", "📈", "📉", "⚖️", "🛡️", "✅", "⚠️", "🎯", "🧐", "💪"}
@@ -1860,6 +1866,7 @@ def converse_about_trade(request: TradeConverseRequest, user: dict = Depends(req
         "You do ALL calculations and tedious work for them, but never state position sizes, lot sizes, prices you were not given, or dollar risk yourself: "
         "the app computes those exactly from the proposal you return and shows them. "
         "Never place trades and never claim to. Never promise outcomes or call any trade a sure thing. "
+        "When discussing stop orders, explain that execution and execution price are not guaranteed and losses can exceed the estimate. "
         'Return JSON only: {"reply": "your message", "emote": one of 👋 🤔 💡 📈 📉 ⚖️ 🛡️ ✅ ⚠️ 🎯 🧐 💪, '
         '"proposal": null or {"symbol": "TICKER", "side": "buy" or "sell", "stop_loss": number or null, "take_profit": number or null}}. '
         "Only include a proposal once the user has a clear direction and symbol after some discussion, and tell them you have prepared the numbers for them to review. "
@@ -1952,6 +1959,86 @@ def _service_request(table: str, method: str, params: dict | None = None, **kwar
     return response.json() if response.content else []
 
 
+def ensure_alpaca_paper_cursor(connection: dict, adapter) -> str:
+    if connection["broker"] != "alpaca" or connection["environment"] != "paper":
+        raise ValueError("Fill reconciliation requires an Alpaca paper connection")
+    label = adapter.account().get("label")
+    if (not isinstance(label, str) or not label.strip() or len(label) > 128
+            or label != connection.get("account_label")):
+        raise ValueError("Alpaca account does not match the stored connection")
+    cursor_id = _service_request("rpc/ensure_alpaca_fill_cursor", "POST", json={
+        "p_connection_id": connection["id"],
+        "p_connection_revision": connection["fill_revision"],
+        "p_account_number": label,
+    })
+    if not isinstance(cursor_id, str):
+        raise ValueError("Fill ledger returned an invalid cursor")
+    return str(uuid.UUID(cursor_id))
+
+
+def reconcile_stored_alpaca_paper_cursor(cursor_id: str) -> tuple[int, bool]:
+    """Reconcile an existing cursor; callers must arrange authorization and scheduling."""
+    cursor_id = str(uuid.UUID(cursor_id))
+    cursors = _service_request("alpaca_fill_cursors", "GET", {
+        "select": "id,user_id,connection_id,account_number,starts_at,cursor",
+        "id": f"eq.{cursor_id}", "limit": "1",
+    })
+    if not cursors:
+        raise ValueError("Fill cursor not found")
+    cursor = cursors[0]
+    if not cursor["connection_id"]:
+        raise ValueError("Fill cursor is disconnected")
+    connection, adapter = _load_connection(cursor["user_id"], "alpaca")
+    revision = connection["fill_revision"]
+
+    def save_page(state_id, expected, next_cursor, fills):
+        result = _service_request("rpc/save_alpaca_fill_page", "POST", json={
+            "p_cursor_id": state_id,
+            "p_expected_cursor": expected,
+            "p_next_cursor": next_cursor,
+            "p_fills": fills,
+            "p_connection_revision": revision,
+        })
+        if type(result) is not int or result < 0 or result > len(fills):
+            raise ValueError("Fill ledger returned an invalid inserted count")
+        return result
+
+    return fill_tracking.reconcile_paper_cursor(connection, cursor, adapter, save_page)
+
+
+class FillReconciliationRequest(BaseModel):
+    connection_id: uuid.UUID
+
+
+@app.post("/internal/alpaca-paper/reconcile")
+def reconcile_alpaca_paper_connection(
+    request: FillReconciliationRequest,
+    authorization: str | None = Header(default=None),
+):
+    secret = os.getenv("ALPACA_FILL_RECONCILIATION_SECRET", "")
+    if len(secret.encode("utf-8")) < 32:
+        raise HTTPException(status_code=503, detail="Paper fill reconciliation is not configured.")
+    expected = sha256(f"Bearer {secret}".encode("utf-8")).digest()
+    provided = sha256((authorization or "").encode("utf-8")).digest()
+    if not hmac.compare_digest(expected, provided):
+        raise HTTPException(status_code=401, detail="Invalid reconciliation authorization.")
+    rows = _connections_request("GET", {
+        "select": "*", "id": f"eq.{request.connection_id}", "broker": "eq.alpaca",
+        "environment": "eq.paper", "limit": "1",
+    })
+    if not rows:
+        raise HTTPException(status_code=404, detail="Alpaca paper connection not found.")
+    connection = rows[0]
+    adapter = brokers.get_adapter("alpaca", brokers.decrypt_credentials(connection["credentials_encrypted"]), "paper")
+    try:
+        cursor_id = ensure_alpaca_paper_cursor(connection, adapter)
+        inserted, more = reconcile_stored_alpaca_paper_cursor(cursor_id)
+    except ValueError as e:
+        logger.warning("Alpaca paper reconciliation failed for connection %s: %s", request.connection_id, e)
+        raise HTTPException(status_code=409, detail="Paper fill reconciliation could not safely continue.") from e
+    return {"inserted": inserted, "more": more}
+
+
 def _check_trading_rules(user_id: str, adapter, symbol: str, side: str, quantity: float, context: dict, stop_loss: float | None) -> None:
     """Enforces the limits the user set in Settings on every new position, whoever or whatever asked for the order."""
     if context.get("action") != "entry":
@@ -1995,8 +2082,15 @@ def _pre_trade_context(adapter, symbol: str, side: str) -> dict:
     return context
 
 
+def _use_confirmed_paper_fills(broker: str, environment: str) -> bool:
+    return (broker == "alpaca" and environment == "paper"
+            and os.getenv("ALPACA_CONFIRMED_FILL_JOURNAL", "").strip().lower() == "true")
+
+
 def _capture_trade(user_id: str, kind: str, symbol: str, side: str, quantity: float | None, broker: str, environment: str, context: dict, adapter=None):
     """Automatically records the trade and a draft journal entry. Never blocks or fails the order."""
+    if _use_confirmed_paper_fills(broker, environment):
+        return
     try:
         price = context.get("price")
         details = {
@@ -2194,12 +2288,25 @@ def sync_journal(user: dict = Depends(require_authenticated_user)):
     """Reconciles the journal with the broker: positions opened or closed outside Zuri are recorded too."""
     try:
         row, adapter = _active_connection(user["id"])
+    except HTTPException as e:
+        if e.status_code == 404:
+            return {"created": 0, "closed": 0}
+        raise
+    try:
+        if _use_confirmed_paper_fills(row["broker"], row["environment"]):
+            try:
+                cursor_id = ensure_alpaca_paper_cursor(row, adapter)
+                inserted, more = reconcile_stored_alpaca_paper_cursor(cursor_id)
+            except ValueError as e:
+                logger.warning("Paper fill journal sync failed: %s", e)
+                raise HTTPException(status_code=503, detail="Unable to safely reconcile paper fills. Please try again.") from e
+            return {"created": inserted, "closed": 0, "more": more}
         positions = adapter.positions()
     except HTTPException:
-        return {"created": 0, "closed": 0}
+        raise
     except Exception as e:
-        logger.info("Journal sync skipped: %s", e)
-        return {"created": 0, "closed": 0}
+        logger.warning("Journal sync failed: %s", e)
+        raise HTTPException(status_code=503, detail="Journal sync failed. Please try again.") from e
     events = _service_request("journey_events", "GET", {
         "select": "symbol,kind,details,created_at", "user_id": f"eq.{user['id']}",
         "kind": "in.(order_placed,position_detected,position_closed)", "order": "created_at.asc", "limit": "1000"})
@@ -2335,8 +2442,16 @@ class JournalAnalyzeRequest(BaseModel):
 def analyze_journal(request: JournalAnalyzeRequest, user: dict = Depends(require_authenticated_user), authorization: str | None = Header(default=None)):
     events, entries, positions, equity, _ = _load_journey_data(user["id"])
     stats = journal_analytics.compute_stats(events, entries, positions, equity, request.tz_offset_minutes)
-    if not events:
+    if not events and not stats["confirmed_fill_journal_entries"]:
         return {"report": "I don't have any activity to analyse yet. Add symbols to your watchlist, open charts and place a trade. I'll track it all automatically.", "stats": stats}
+    if not events:
+        return {
+            "report": (
+                f"I found {stats['confirmed_fill_journal_entries']} confirmed fill journal entries in your recent journal. "
+                "Partial fills are separate entries, and I can't determine completed trades or outcomes from them alone."
+            ),
+            "stats": stats,
+        }
     traits = get_zuri_journey(user["id"], authorization) if authorization else None
     manual_notes = [
         {"symbol": e["symbol"], "side": e["side"], "setup": e["setup"], "note": e["note"][:300], "at": e["created_at"]}
@@ -2345,6 +2460,10 @@ def analyze_journal(request: JournalAnalyzeRequest, user: dict = Depends(require
     system_prompt = (
         "You are Zuri, a trading-journal analyst. Analyse the user's recorded trading journey "
         "from first interest in a symbol through every trade. Use ONLY the figures supplied below; "
+        "Legacy order and position events are unverified and may include unfilled or cancelled orders: "
+        "never present their trade counts or outcomes as confirmed facts. Confirmed fill journal entries "
+        "are a limited sample and can include partial fills; do not infer entries, exits, complete trades, "
+        "stop protection, or profit and loss from them. State these limitations clearly. "
         "never invent numbers, prices or outcomes. If a statistic is null or the sample is small "
         "(under about 10 trades), say so plainly and treat patterns as tentative. Output markdown "
         "with these sections: **Leaks** (each leak with the exact evidence figure and a concrete fix), "

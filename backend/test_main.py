@@ -1,7 +1,7 @@
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import requests
 from fastapi.testclient import TestClient
@@ -472,6 +472,17 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(context["action"], "exit")
         self.assertEqual(context["pl_per_unit"], 2.0)
 
+    def test_confirmed_paper_fills_do_not_request_legacy_snapshot_lookup(self):
+        body = {"symbol": "AAPL", "side": "buy", "quantity": 1, "confirmed": True}
+        with patch.dict(os.environ, {"ALPACA_CONFIRMED_FILL_JOURNAL": "true"}):
+            response = self._order({}, [], body)
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(response.json()["legacy_snapshot_expected"], False)
+        with patch.dict(os.environ, {"ALPACA_CONFIRMED_FILL_JOURNAL": "false"}):
+            response = self._order({}, [], body)
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(response.json()["legacy_snapshot_expected"], True)
+
     def _order(self, rules, held, body=None):
         adapter = SimpleNamespace(
             place_order=lambda *a: {"order_id": "1", "status": "accepted"},
@@ -574,6 +585,31 @@ class BrokerTests(unittest.TestCase):
         with patch("backend.main._load_journey_data", return_value=([], [], [], None, None)), patch("backend.main.get_groq_client") as groq:
             response = self.client.post("/api/journal/analyze", json={})
         self.assertEqual(response.status_code, 200)
+        groq.assert_not_called()
+
+    def test_confirmed_partial_fills_do_not_count_as_entries_or_exits(self):
+        from backend.journal import compute_stats
+
+        entries = [
+            {"source": "confirmed_fill", "symbol": "AAPL", "side": "Buy", "created_at": "2026-10-02T08:00:00Z"},
+            {"source": "confirmed_fill", "symbol": "AAPL", "side": "Buy", "created_at": "2026-10-02T08:00:01Z"},
+            {"source": "manual", "symbol": "AAPL", "side": "Long", "created_at": "2026-10-02T08:00:00Z"},
+        ]
+        stats = compute_stats([], entries, [], None)
+        self.assertEqual(stats["confirmed_fill_journal_entries"], 2)
+        self.assertEqual((stats["entry_trades"], stats["exits"]), (0, 0))
+        self.assertIsNone(stats["win_rate_pct"])
+        self.assertIn("partial fills", stats["trade_metrics_basis"])
+
+    def test_analysis_with_only_confirmed_fills_explains_limits(self):
+        entries = [{"source": "confirmed_fill", "symbol": "AAPL", "side": "Buy",
+                    "created_at": "2026-10-02T08:00:00Z"}]
+        with patch("backend.main._load_journey_data", return_value=([], entries, [], None, None)), \
+                patch("backend.main.get_groq_client") as groq:
+            response = self.client.post("/api/journal/analyze", json={})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["stats"]["confirmed_fill_journal_entries"], 1)
+        self.assertIn("can't determine completed trades", response.json()["report"])
         groq.assert_not_called()
 
     def _row(self, environment):
@@ -731,6 +767,47 @@ class ChartResearchTests(unittest.TestCase):
         self.assertNotIn("order_class", payload)
         self.assertTrue(result["market_open"])
         self.assertEqual(len(result["warnings"]), 1)
+
+    @patch("backend.brokers._request")
+    def test_alpaca_fill_activities_read_individual_partial_fills(self, request):
+        from backend.brokers import AlpacaAdapter
+
+        request.return_value = [
+            {"activity_type": "FILL", "id": "activity-1", "order_id": "order-1",
+             "symbol": "BTC/USD", "side": "buy", "qty": "0.01", "price": "60000",
+             "transaction_time": "2026-11-10T12:00:00Z", "type": "partial_fill"},
+            {"activity_type": "FILL", "id": "activity-2", "order_id": "order-1",
+             "symbol": "BTC/USD", "side": "buy", "qty": "0.02", "price": "60010",
+             "transaction_time": "2026-11-10T12:00:01Z", "type": "fill"},
+        ]
+        adapter = AlpacaAdapter({"api_key": "k", "api_secret": "s"}, "paper")
+        fills = adapter.fill_activities("previous-activity", "2026-11-01T00:00:00Z")
+        self.assertEqual([fill["id"] for fill in fills], ["activity-1", "activity-2"])
+        self.assertEqual([fill["quantity"] for fill in fills], [0.01, 0.02])
+        self.assertEqual(fills[0]["symbol"], "BTCUSD")
+        self.assertEqual(request.call_args.kwargs["params"], {
+            "direction": "asc", "page_size": 100, "page_token": "previous-activity", "after": "2026-11-01T00:00:00Z",
+        })
+        self.assertIn("paper-api.alpaca.markets/v2/account/activities/FILL", request.call_args.args[1])
+
+    @patch("backend.brokers._request")
+    def test_alpaca_fill_activities_reject_invalid_data(self, request):
+        from fastapi import HTTPException
+        from backend.brokers import AlpacaAdapter
+
+        adapter = AlpacaAdapter({"api_key": "k", "api_secret": "s"}, "paper")
+        valid = {"activity_type": "FILL", "id": "activity", "order_id": "order",
+                 "symbol": "AAPL", "side": "buy", "qty": "1", "price": "100",
+                 "transaction_time": "2026-11-10T12:00:00Z"}
+        for update in ({"qty": "NaN"}, {"price": "0"}, {"id": ""}, {"side": "invalid"},
+                       {"transaction_time": "bad"}, {"transaction_time": "2026-11-10T12:00:00"}):
+            with self.subTest(update=update):
+                request.return_value = [{**valid, **update}]
+                with self.assertRaises(HTTPException):
+                    adapter.fill_activities()
+        request.return_value = {"unexpected": "object"}
+        with self.assertRaises(HTTPException):
+            adapter.fill_activities()
 
     @patch("backend.brokers._request")
     def test_alpaca_crypto_price_and_bars_use_crypto_endpoints(self, request):
@@ -985,13 +1062,17 @@ class ChartResearchTests(unittest.TestCase):
         )
         reply = {"reply": "Sounds good, I prepared the numbers.", "emote": "🎯", "proposal": {"symbol": "aapl", "side": "buy", "stop_loss": None, "take_profit": None}}
         completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=_json.dumps(reply)))])
-        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: completion)))
+        create = Mock(return_value=completion)
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
         with patch("backend.main._active_connection", return_value=({"broker": "alpaca", "environment": "paper"}, adapter)), \
              patch("backend.main.get_user_profile_traits", return_value=([], None)), \
              patch("backend.main.get_zuri_journey", return_value=None), \
              patch("backend.main.get_groq_client", return_value=client):
             response = self.client.post("/api/trade/converse", headers={"Authorization": "Bearer t"}, json={"messages": [{"role": "user", "content": "I want to buy AAPL"}], "risk_percent": 1})
         self.assertEqual(response.status_code, 200)
+        prompt = create.call_args.kwargs["messages"][0]["content"]
+        self.assertIn("execution price are not guaranteed", prompt)
+        self.assertIn("losses can exceed the estimate", prompt)
         plan = response.json()["plan"]
         self.assertEqual(plan["symbol"], "AAPL")
         self.assertGreater(plan["units"], 0)
