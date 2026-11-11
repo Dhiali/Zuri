@@ -135,49 +135,55 @@ In the [Google Cloud Console](https://console.cloud.google.com/), create a web a
 
 ## Project features
 
-The mockup briefs below describe the screens to add to this showcase. Use fictional account details and hide personal information and broker credentials.
+The mockups below illustrate Zuri's key screens. Keep personal information and broker credentials out of showcase assets.
 
 ### Guided onboarding
 
 Zuri welcomes new users, learns their experience and goals, and guides them through the workspace and paper-broker setup. A first-trade coach tracks their progress.
 
-**Mockup to create:** The "Meet Zuri" conversation alongside an onboarding progress indicator or a highlighted step in the guided tour.
+![Zuri onboarding introduces the AI trading assistant and guided setup.](./docs/mockups/onboarding.png)
 
 ### Dashboard and learning
 
 The dashboard brings together account information, trading activity, a suggested next step and learning resources tailored to the user's experience.
 
-**Mockup to create:** The dashboard with paper-account balance cards, a weekly activity summary, Zuri's next-step card and a learning resource.
+![The Zuri dashboard with account metrics, a next-step card and market overview.](./docs/mockups/dashboard.png)
 
 ### Charts and market research
 
 Users can explore TradingView charts, manage a watchlist and read market news. They can also create scanners and review historical signals using broker candle data.
 
-**Mockup to create:** The charts workspace showing a price chart, watchlist, timeframe controls and market-news or scanner panel. Label delayed quotes where appropriate.
+![The charts workspace with timeframe controls, watchlist, market intelligence and scanner tools.](./docs/mockups/charts.png)
 
 ### Paper trading and order management
 
 The trade ticket lets users select a symbol, side and quantity, review estimated value, and confirm a market order. The workspace also displays pending orders and open positions. Alpaca paper trading supports practice without real funds; live accounts require an additional confirmation phrase.
 
-**Mockup to create:** The trade screen with an **Alpaca paper** badge, a filled-in order ticket, confirmation checkbox, pending orders and open positions.
+![The paper trading workspace with an order ticket, account metrics and quote overview.](./docs/mockups/trade.png)
 
 ### Journal, history and insights
 
 The journal combines personal notes with automatic records and, when configured, confirmed Alpaca paper fills. Users can sync fills, analyse their journey and review trade history and chart snapshots. Older automatic records may be unverified; see [fill tracking](#alpaca-paper-fill-tracking).
 
-**Mockup to create:** The journal showing a clearly labelled confirmed paper fill, **Sync journal**, an insights summary and a trade note or snapshot.
+**History**
+
+![Trade history with closed trades, filled orders, open positions and chart snapshots.](./docs/mockups/history.png)
+
+**Journal**
+
+![The trading journal with confirmed paper fills and AI-assisted journey analysis.](./docs/mockups/journal.png)
 
 ### Zuri AI companion
 
 Zuri answers questions, explains trading concepts and helps users think through trade plans. It can propose actions, but users remain responsible for confirming orders.
 
-**Mockup to create:** The Zuri AI chat panel over the workspace, showing a short question about risk and an educational response.
+![Zuri AI beside the chart, offering market context and educational trade guidance.](./docs/mockups/ai.png)
 
 ### Broker and account settings
 
 Users can link or disconnect supported broker accounts, adjust trading and risk preferences, and manage account settings. Broker credentials are encrypted before storage.
 
-**Mockup to create:** The Broker settings screen showing a connected paper account and its status; do not show API keys, account numbers or other personal data.
+![Broker settings showing a connected paper account and available account controls.](./docs/mockups/settings.png)
 
 ## Development process
 
