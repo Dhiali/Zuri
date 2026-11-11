@@ -320,7 +320,7 @@ The PostgreSQL fill integration test is opt-in and requires a disposable Docker 
 
 ### Demo video
 
-The demo video is **coming soon**. Its link will be added here when available; the planned walkthrough covers sign-in, the dashboard, paper trading, the journal and Zuri AI.
+[Watch the demo video](https://drive.google.com/file/d/1DkEPofEVJCpiFtMYmbmayn5SHN5xGkdl/view?usp=sharing).
 
 ## Conclusion
 
